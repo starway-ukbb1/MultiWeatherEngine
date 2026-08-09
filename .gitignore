@@ -1,6 +1,4 @@
 bin/
 obj/
-*.bak
-*.bak.*
-*.user
-.vs/
+lib/
+*.bak*

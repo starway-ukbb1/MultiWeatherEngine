@@ -10,6 +10,7 @@ using Object = UnityEngine.Object;
 
 namespace MultiWeatherEngine;
 
+// v2.0 — 多天气引擎管理器：多系统共存、自然生成、演化、移动、合并(大吞小)、F6 气象菜单。
 public class TyphoonManager : MonoBehaviour
 {
 	public static TyphoonManager main;
@@ -24,10 +25,28 @@ public class TyphoonManager : MonoBehaviour
 
 	public bool menuOpen;
 
-	
+	// v2.3.8 优化#2 — F6 菜单 GUIStyle 缓存（原 OnGUI 每帧 new 8 个 GUIStyle + GUIStyleState
+	// → 菜单开着就每帧 GC。首次创建复用；tb 分选中/未选中两态）。
+	private GUIStyle mBox;
+
+	private GUIStyle mTitle;
+
+	private GUIStyle mSmall;
+
+	private GUIStyle mBtn;
+
+	private GUIStyle mTbSel;
+
+	private GUIStyle mTb;
+
+	private GUIStyle mLine;
+
+	private GUIStyle mInfo;
+
+	// v2.0.10 — 底部"活跃天气系统"面板展开状态（F9 切换，标题栏点击也可切换）。
 	public static bool panelExpanded = true;
 
-	
+	// v2.0.13 — F6 气象菜单可拖动（拖标题栏）。
 	private static Vector2 menuOffset = Vector2.zero;
 	private static bool menuDragging;
 	private static Vector2 menuGrabDelta;
@@ -54,7 +73,7 @@ public class TyphoonManager : MonoBehaviour
 
 	public bool pValid;
 
-	
+	// v2.0.20 — 风场调试诊断（HUD 显示，定位"进风暴本地风不动"断点）。
 	public bool diagPValid;
 	public string diagType = "-";
 	public double diagRo = -1.0;
@@ -64,10 +83,10 @@ public class TyphoonManager : MonoBehaviour
 	public double diagU;
 	public double diagW;
 	public double diagWindSum;
-	
+	// v2.0.53 — 下击暴流诊断（顶掉龙卷调试显示）：dro=玩家相对下暴中心距离/Rmax、spd=出流速度。
 	public double diagDro;
 	public double diagDspd;
-	private float lastDLog = -99f;   
+	private float lastDLog = -99f;   // v2.0.53 — 下暴诊断日志节流
 
 	private void Awake()
 	{
@@ -121,15 +140,15 @@ public class TyphoonManager : MonoBehaviour
 		ApplyShake();
 	}
 
-	
+	// v2.0.7 — LateUpdate（在 SFS 的 UpdatePostProcessing 之后）叠加海浪增强 + 近距风暴变灰。
 	private void LateUpdate()
 	{
 		BoostWaves();
 		ApplyProximityFX();
 	}
 
-	
-	
+	// v2.0.16 — 近距风暴因子 0-1.4：视野拉近到风暴占据整个天空时（距中心近 × 视距小 × 强度高）
+	// 生效。用于画面变灰（ProximityFX）与抖动增强（ApplyShake）。
 	private float ProximityFactor()
 	{
 		if (!pValid)
@@ -189,8 +208,8 @@ public class TyphoonManager : MonoBehaviour
 			{
 				return 0f;
 			}
-			
-			
+			// v2.0.91 — 台风风眼内灰度削减（用户：风眼区域灰度剪掉、接近无灰）：
+			// 玩家在台风风眼（ro < TyphoonEyeR）内 → 画面接近原色（真实风眼晴空无云不灰）。
 			if (bestType == StormType.Typhoon && bestRo < WeatherSystem.TyphoonEyeR(bestCat))
 			{
 				return 0.02f;
@@ -205,15 +224,73 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	
-	
-	
-	
-	
+	// v2.2.3 — 沙尘暴能见度因子（用户：能见度，滤镜也同步）：玩家在沙尘暴沙尘层内 →
+	// 后处理加昏黄滤镜（模拟能见度骤降），强度越强（特强沙尘暴 <50m 能见度）滤镜越浓。
+	// 距离中心 2.5Rmax 内线性衰减（沙尘覆盖区）、沙尘层 Htop 内最强之上衰减（沙尘贴地）、
+	// 按 category 放大（浮尘轻、特强重）。SFS 后处理无雾效，用饱和/对比/亮度/B 通道实现。
+	private float DustFactor()
+	{
+		if (!pValid)
+		{
+			return 0f;
+		}
+		try
+		{
+			Location pl = GetPlayerLocation();
+			if (pl == null || pl.planet == null)
+			{
+				return 0f;
+			}
+			double best = 0.0;
+			for (int i = 0; i < systems.Count; i++)
+			{
+				WeatherSystem s = systems[i];
+				if (s == null || !s.active || s.type != StormType.DustStorm || s.planet == null || (Object)s.planet != (Object)pl.planet)
+				{
+					continue;
+				}
+				double da = s.centerAngle - pl.position.AngleRadians;
+				while (da > Math.PI)
+				{
+					da -= Math.PI * 2.0;
+				}
+				while (da < -Math.PI)
+				{
+					da += Math.PI * 2.0;
+				}
+				double ro = Math.Abs(da) * s.planet.Radius / s.Rmax;
+				if (ro > 2.5)
+				{
+					continue;
+				}
+				double distF = 1.0 - ro / 2.5;                                       // 中心最浓、2.5Rmax 边缘归零
+				double strF = 0.35 + 0.65 * (s.category / 6.0);                      // 强度：特强沙尘暴能见度最低
+				double hF = 1.0 - 0.6 * WeatherSystem.Clamp01(pl.Height / Math.Max(s.Htop, 1.0));   // 沙尘层内最强（Location.Height = 距海平面）
+				double v = distF * strF * hF;
+				if (v > best)
+				{
+					best = v;
+				}
+			}
+			return (float)best;
+		}
+		catch
+		{
+			return 0f;
+		}
+	}
+
+	// v2.0.16 — 近距风暴变灰：风暴占据整个天空时画面变灰。
+	// v2.0.38 — 全屏灰化大幅减弱（饱和度 0.25→0.55、对比 0.7→0.88、亮度 0.62→0.82）：
+	// 全屏后处理会把龙卷卷尘环/漏斗等附属现象一起拉成灰暗（用户反馈"因灰色滤镜看不见
+	// 龙卷触底"）——主变灰职责交回 sky 穹顶（海平面以上 maxOp 照旧盖到 1），
+	// 地面/飞船区域只轻微压暗，龙卷触底细节保留可见。
 	private void ApplyProximityFX()
 	{
 		float f = ProximityFactor();
-		if (f < 0.02f)
+		float dust = DustFactor();   // v2.2.3 — 沙尘暴能见度滤镜
+		float g0 = Mathf.Max(f, dust);
+		if (g0 < 0.02f)
 		{
 			return;
 		}
@@ -229,12 +306,12 @@ public class TyphoonManager : MonoBehaviour
 				return;
 			}
 			Material m = pp.postProcessingMaterial;
-			
-			
+			// v2.0.87 — 灰度 3 倍（用户要求）：灰化程度×3——f×3 提前到位且最终更灰
+			// （原 f=1 时饱和度 0.55/亮度 0.82，现在 0.15/0.62，接近黑白）。
 			float g = Mathf.Clamp01(f * 3f);
-			
-			
-			
+			// v2.0.91 — 高度变暗模拟云中（用户：高度 >2000m 颜色逐渐加深加黑，到云中间区域
+			// 最黑，再灰和黑逐渐褪去）：以最近系统云带为基准——2000m 起线性变暗，
+			// (Hbase+Htop)/2 云中峰值最黑（亮度再降 ~50%）、云顶×1.15 之上完全褪回。
 			double hDark = 0.0;
 			try
 			{
@@ -284,25 +361,34 @@ public class TyphoonManager : MonoBehaviour
 			catch
 			{
 			}
-			float g2 = Mathf.Clamp01(g + (float)hDark * 0.6f);   
-			m.SetFloat(Shader.PropertyToID("_Saturation"), Mathf.Lerp(1f, 0.15f, g2));
+			float g2 = Mathf.Clamp01(g + (float)hDark * 0.6f);   // 云中：灰度再叠加
+			// v2.2.5 — 滤镜去绿（用户：太绿了）：原 _Multiplier 三通道统一降亮后 G 相对
+			// 最高（人眼对绿最敏感）→ 画面发绿。沙尘主导时 R 抬 / G 压 / B 大压 → 明确
+			// 黄褐色（沙尘暴昏黄）；饱和度沙尘时保留沙黄色相（0.42 而非台风灰化 0.15）。
+			float dustBlend = dust / Mathf.Max(g0, 0.01f);
+			float satTarget = Mathf.Lerp(0.15f, 0.42f, dustBlend);
+			m.SetFloat(Shader.PropertyToID("_Saturation"), Mathf.Lerp(1f, satTarget, g2));
 			m.SetFloat(Shader.PropertyToID("_Contrast"), Mathf.Lerp(1f, 0.7f, g2));
-			
-			
-			
-			
-			
-			
-			float lum = Mathf.Lerp(1f, 0.62f, g) * (1f - (float)hDark * 0.7f);
-			float bLum = lum * (1f - (float)hDark * 0.45f) * (1f - g * 0.28f);
-			m.SetVector(Shader.PropertyToID("_Multiplier"), new Vector4(lum, lum, bLum, 1f));
+			// v2.0.92 — 云中更暗 + 偏黄（用户：还是不够暗、加入一些黄色——真实风暴云内
+			// 光线偏黄褐）：亮度再降 0.5→0.7（云中峰值亮度 ~0.19，接近黑）；B 通道压低
+			// （hDark=1 时 B×0.55）→ R/G 相对高、B 低 = 黄褐色调，模拟穿云的光线色温。
+			// v2.0.93 — 克制 SFS 蓝色静态大气贴图（用户：背景蓝色是游戏自带大气贴图，
+			// 需要其他色克一下）：B 通道除云中外，随灰化 g 也压（g=1 时再 ×0.72）——
+			// 风暴内蓝色天空背景整体被压向暖灰，不再蓝得扎眼。
+			// v2.2.3 — 沙尘能见度滤镜：沙尘主导时（dustBlend→1）B 通道额外压低 → 昏黄
+			// 天空（现实沙尘暴视觉）+ 亮度再降（沙尘遮挡阳光）；纯台风时 dust=0 零影响。
+			float lum = Mathf.Lerp(1f, 0.62f, g) * (1f - (float)hDark * 0.7f) * (1f - dustBlend * dust * 0.25f);
+			float lumR = lum * (1f + dustBlend * dust * 0.14f);    // R 抬 → 黄
+			float lumG = lum * (1f - dustBlend * dust * 0.12f);    // G 压 → 去绿
+			float bLum = lum * (1f - (float)hDark * 0.45f) * (1f - g * 0.28f) * (1f - dustBlend * dust * 0.5f);
+			m.SetVector(Shader.PropertyToID("_Multiplier"), new Vector4(lumR, lumG, bLum, 1f));
 		}
 		catch
 		{
 		}
 	}
 
-	
+	// 海浪增强（实验）：风暴区附近水面波浪幅度（shader 若支持 _WaveHeight 属性则生效）。
 	private void BoostWaves()
 	{
 		if (!pValid)
@@ -361,7 +447,7 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	
+	// ===== 自然生成：有大气行星上，随机时间在玩家附近触发单体 =====
 	private void NaturalSpawn()
 	{
 		if (systems.Count >= MaxSystems)
@@ -383,12 +469,28 @@ public class TyphoonManager : MonoBehaviour
 		{
 			return;
 		}
+		// v2.2.1 — 沙尘暴自然生成（独立天气系统，用户：沙尘暴应该是独立系统才对）：
+		// 玩家在沙漠地形时概率触发（蒙古气旋/冷锋驱动干旱区沙尘暴，不依赖雷暴）。
+		bool inDesert = false;
+		try
+		{
+			inDesert = WeatherSystem.TerrainAt(loc.planet, loc.position) == TerrainKind.Desert;
+		}
+		catch
+		{
+		}
+		if (inDesert && UnityEngine.Random.value < 0.55f)
+		{
+			double leadD = (double)(8000f + UnityEngine.Random.Range(0f, 30000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
+			SpawnSystem(StormType.DustStorm, loc, leadD, 0, true);
+			return;
+		}
 		StormType t = (UnityEngine.Random.value < 0.55f) ? StormType.Cell : ((UnityEngine.Random.value < 0.7f) ? StormType.Multicell : StormType.Supercell);
 		double lead = (double)(12000f + UnityEngine.Random.Range(0f, 50000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
-		SpawnSystem(t, loc, lead, 0, true);   
+		SpawnSystem(t, loc, lead, 0, true);   // v2.0.88 — 自然生成静默（不弹提示）
 	}
 
-	
+	// ===== 合并：大吞小（v2.0.51 加合并动画：不再瞬间移除） =====
 	private void TryMergeAll()
 	{
 		for (int i = 0; i < systems.Count; i++)
@@ -403,10 +505,10 @@ public class TyphoonManager : MonoBehaviour
 				}
 				double ang = Math.Abs(WeatherSystem.WrapPi(a.centerAngle - b.centerAngle));
 				double dist = ang * a.planet.Radius;
-				
-				
-				
-				
+				// v2.0.64 — 合并判定放宽：1.2×(Ra+Rb)（边缘刚接触触发）。
+				// v2.0.73 — 台风吞噬整个区域（用户：有自然风暴在台风内部都不合并）：任一系统
+				// 是台风时，合并距离用台风 Router×0.9（Router=Rmax×9，整个台风影响区域）——
+				// 风暴进入台风区域即被吞；非台风仍用 1.2×(Ra+Rb)。
 				double mergeDist;
 				if (a.type == StormType.Typhoon)
 				{
@@ -426,40 +528,45 @@ public class TyphoonManager : MonoBehaviour
 				}
 				WeatherSystem big = (a.Rmax >= b.Rmax) ? a : b;
 				WeatherSystem small = (a.Rmax >= b.Rmax) ? b : a;
-				
+				// v2.0.51 — 合并动画：正在合并中的系统不再参与新合并。
 				if (small.mergeAnimT >= 0.0 || big.mergeAnimT >= 0.0)
 				{
 					continue;
 				}
-				
+				// 启动合并动画：small 向 big 靠近 + 渐隐（3 秒后移除）。
 				small.mergeTarget = big;
-				small.mergeMode = (big.type == StormType.Typhoon) ? 1 : 0;   
+				small.mergeMode = (big.type == StormType.Typhoon) ? 1 : 0;   // 台风吞噬=拆散飞向台风
 				small.mergeAnimT = 0.0;
 				if (big.type == StormType.Typhoon && small.type == StormType.Typhoon)
 				{
-					
+					// 双台风合并：双方粒子互相靠近中点、重组新台风（big 保留吸收 small）。
 					small.mergeMode = 2;
 					big.mergeMode = 2;
 					big.mergeTarget = small;
 					big.mergeAnimT = 0.0;
 					big.mergeMidAng = small.mergeMidAng = WeatherSystem.WrapPi((big.centerAngle + small.centerAngle) * 0.5);
 				}
-				
+				// v2.0.2 — 合并增强递减 + 上限（防无限加强）：越吞越少，且不超基准 3x/2x。
 				big.mergeCount++;
 				double gain = 1.0 / (1.0 + big.mergeCount * 0.6);
 				big.Rmax = Math.Min(big.Rmax * (1.0 + 0.12 * gain), big.rmaxBase * 3.0);
 				big.Router = big.Rmax * 9.0;
 				big.Vmax = Math.Min(big.Vmax * (1.0 + 0.08 * gain), big.vmaxBase * 2.0);
-				
-				
+				// v2.0.99 — 修复：v2.0.98 强度平滑后风场用 vmaxDisplay，合并增强直接改 Vmax
+				// 不生效（回归）。同步 vmaxTarget → display 平滑爬升 3 秒呈现合并增强。
+				// v2.3.7 — 审查二轮：同步 vmaxTargetBase（原漏同步 → 能量驱动公式下一帧把
+				// 合并 +8% 风速抹回旧档位基准，功能回归）+ 合并回补能量 max(70)（重组新生
+				// 语义，🟡-13）。
+				big.vmaxTargetBase = big.Vmax;
 				big.vmaxTarget = big.Vmax;
 				big.intensity = 1.0;
 				big.stage = 1;
+				big.energy = Math.Max(big.energy, 70.0);
 				Msg(WeatherSystem.TypeName(small.type) + " 被 " + WeatherSystem.TypeName(big.type) + " 吞并（合并增强 #" + big.mergeCount + "）");
 				break;
 			}
 		}
-		
+		// v2.0.51 — 合并动画完成清理：被吞方（mode 0/1）移除；双台风（mode 2）big 保留、重置状态。
 		for (int k = systems.Count - 1; k >= 0; k--)
 		{
 			WeatherSystem s = systems[k];
@@ -481,7 +588,7 @@ public class TyphoonManager : MonoBehaviour
 	private void HandleInput()
 	{
 		bool flag = Input.GetKey((KeyCode)304) || Input.GetKey((KeyCode)303);
-		if (Input.GetKeyDown((KeyCode)288)) 
+		if (Input.GetKeyDown((KeyCode)288)) // F7 — 仅解散选中系统（召唤走 F6 菜单）
 		{
 			if (flag)
 			{
@@ -496,49 +603,52 @@ public class TyphoonManager : MonoBehaviour
 			}
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)287)) 
+		if (Input.GetKeyDown((KeyCode)287)) // F6 — 气象菜单开关
 		{
 			menuOpen = !menuOpen;
 			Msg("气象菜单 " + (menuOpen ? "开" : "关") + "（F6）");
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)289) && selected != null && selected.active) 
+		if (Input.GetKeyDown((KeyCode)289) && selected != null && selected.active) // F8 强度
 		{
-			
-			
+			// v2.0.98 — 强度切换走 SetCategory（vmaxTarget 平滑过渡 ~3 秒，粒子过渡动画；
+			// 附属现象强度同步跟母体）；手动切档重置自然发展进度。
 			selected.SetCategory((selected.category + 1) % 7);
 			selected.naturalProgress = 0.0;
+			// v2.2（专项 A 可选）— F8 手动切档回补能量到 80（"手动强化=回满成熟能量"，
+			// god mode 期待落地；仍守 80 封顶不破设计）。
+			selected.energy = Math.Max(selected.energy, 80.0);
 			Msg(WeatherSystem.TypeName(selected.type) + " 强度 -> " + WeatherSystem.StrengthName(selected.type, selected.category) + "  (" + selected.vmaxTarget.ToString("0") + " m/s)");
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)290)) 
+		if (Input.GetKeyDown((KeyCode)290)) // F9 — 底部活跃系统面板 展开/收起
 		{
 			panelExpanded = !panelExpanded;
 			Msg("活跃天气系统面板 " + (panelExpanded ? "展开" : "收起") + "（F9）");
 			return;
 		}
-		
-		
-		
-		if (Input.GetKeyDown((KeyCode)283) && (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))) 
+		// v2.0.70 — F2/F3/F4/F5 风区位置移动（调试保留，不进键位提示）：F2 切换半区、
+		// Shift+F2 区域黑框、F3/F4 移动、F5 步进。
+		// v2.0.98 — F1 参数编辑面板已删除（用户要求）。
+		if (Input.GetKeyDown((KeyCode)283) && (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))) // Shift+F2 — 区域黑框开关
 		{
 			StormRenderer.downburstZoneShow = !StormRenderer.downburstZoneShow;
 			Msg("风区黑框 " + (StormRenderer.downburstZoneShow ? "显示" : "隐藏") + "（Shift+F2）");
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)283)) 
+		if (Input.GetKeyDown((KeyCode)283)) // F2 — 切换另一半风区
 		{
 			StormRenderer.windZoneHalf = !StormRenderer.windZoneHalf;
 			Msg("风区半区 -> " + (StormRenderer.windZoneHalf ? "B(−s侧)" : "A(+s侧)") + "  (A " + StormRenderer.windZoneOffA.ToString("0.00") + " B " + StormRenderer.windZoneOffB.ToString("0.00") + " Rmax)");
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)286)) 
+		if (Input.GetKeyDown((KeyCode)286)) // F5 — 粗细步进
 		{
 			StormRenderer.windZoneFine = !StormRenderer.windZoneFine;
 			Msg("风区步进 -> " + (StormRenderer.windZoneFine ? "细 (±0.05)" : "粗 (±0.2)"));
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)285)) 
+		if (Input.GetKeyDown((KeyCode)285)) // F4 — 当前半区风区位置增大（向 +s 移）
 		{
 			float step = StormRenderer.windZoneFine ? 0.05f : 0.2f;
 			if (StormRenderer.windZoneHalf)
@@ -553,7 +663,7 @@ public class TyphoonManager : MonoBehaviour
 			}
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)284)) 
+		if (Input.GetKeyDown((KeyCode)284)) // F3 — 当前半区风区位置减小（向 −s 移）
 		{
 			float step = StormRenderer.windZoneFine ? 0.05f : 0.2f;
 			if (StormRenderer.windZoneHalf)
@@ -570,7 +680,7 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	
+	// v2.0.88 — silent=true：自然生成调用不弹 Msg（用户：自然生成风暴提示删除；手动保留）。
 	public WeatherSystem SpawnSystem(StormType type, Location at, double leadMeters, int catBoost, bool silent = false)
 	{
 		if (at == null || (Object)at.planet == (Object)null)
@@ -588,8 +698,8 @@ public class TyphoonManager : MonoBehaviour
 			Msg("天气系统已达上限 " + MaxSystems);
 			return null;
 		}
-		
-		
+		// v2.0.73 — 生成避让（用户：禁止任何风暴生成在已有风暴的区域）：新系统位置
+		// 落在任一现有系统区域（台风=Router、其他=2.4×Rmax 有效区）内则拒绝生成。
 		double newAngle = at.position.AngleRadians + leadMeters / at.planet.Radius;
 		for (int gi = 0; gi < systems.Count; gi++)
 		{
@@ -630,7 +740,7 @@ public class TyphoonManager : MonoBehaviour
 		StormRenderer r = go.AddComponent<StormRenderer>();
 		r.storm = sys;
 		r.Rebuild();
-		r.spawnAnimT = 0f;   
+		r.spawnAnimT = 0f;   // v2.0.98 — 生成动画：云粒子从透明渐入（2 秒）
 		renderers.Add(r);
 	}
 
@@ -639,7 +749,7 @@ public class TyphoonManager : MonoBehaviour
 		systems.Remove(sys);
 		for (int i = renderers.Count - 1; i >= 0; i--)
 		{
-			
+			// v2.0.1 — WeatherSystem 不是 UnityEngine.Object，(Object) 强转恒 null 曾导致比较恒 true、渲染器全被误删。
 			if (renderers[i] != null && renderers[i].storm == sys)
 			{
 				renderers[i].Clear();
@@ -698,7 +808,7 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	
+	// ===== 玩家风场采样（所有系统叠加） =====
 	private void ProbePlayer()
 	{
 		pValid = false;
@@ -725,8 +835,8 @@ public class TyphoonManager : MonoBehaviour
 				nearest = sys;
 				pS = s;
 				pH = h;
-				
-				
+				// v2.0.23 — HUD 显示改用矢量风分解（含龙卷螺旋/下击暴流辐散）：
+				// pU=行星切向分量、pW=行星径向（垂直）分量。
 				Double2 vecW = sys.SampleWindLocal(s, h, playerLocation.position);
 				Double2 nrm2 = playerLocation.position.normalized;
 				Double2 tanV = new Double2(0.0 - nrm2.y, nrm2.x);
@@ -744,7 +854,7 @@ public class TyphoonManager : MonoBehaviour
 		Double2 val2 = playerLocation.velocity - wind;
 		pAirspeed = val2.magnitude;
 		pValid = true;
-		
+		// v2.0.20 — 风场诊断：最近系统的类型/ro/高度/附属强度/原始采样分量。
 		diagPValid = true;
 		diagWindSum = wind.magnitude;
 		if (nearest != null)
@@ -756,13 +866,13 @@ public class TyphoonManager : MonoBehaviour
 			diagStrD = nearest.downburstStrength;
 			diagU = pU;
 			diagW = pW;
-			
-			
-			
+			// v2.0.53 — 下击暴流诊断：dro=玩家相对下暴中心距离/Rmax（v2.0.56 中心保底出流，
+			// dro=0 时 spread=0.5 出流 30 m/s，dro→1.2 满 60 m/s），spd=该点出流速度。
+			// dro 缓慢增长=风暴漂移（5-7 m/s）正常现象。
 			diagDro = Math.Abs(pS) / Math.Max(nearest.Rmax * 0.9, 300.0);
 			diagDspd = nearest.DownburstSpeedAt(pS, pH, playerLocation.position);
-			
-			
+			// v2.0.53 — 下暴诊断文件日志（Player.log），每 2 秒一条防刷屏：
+			// str=强度 dro=距离比(0.4-1.6 起效) spd=出流速度 u/w=风分量。
 			if (nearest.downburstStrength > 0.05 && Time.unscaledTime - lastDLog > 2f)
 			{
 				lastDLog = Time.unscaledTime;
@@ -799,8 +909,8 @@ public class TyphoonManager : MonoBehaviour
 		{
 			return;
 		}
-		
-		
+		// v2.0.16 — 近距风暴抖动增强：风暴占据整个天空时（ProximityFactor）强度最多 ×4。
+		// v2.0.85 — 抖动加剧 3 倍（用户要求）：0.045 → 0.135。
 		float num2 = (float)(Math.Min(num / 70.0, 1.4) * 0.135 * TyphoonConfig.I.cameraShakeScale);
 		num2 *= 1f + ProximityFactor() * 3f;
 		try
@@ -812,7 +922,7 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	
+	// ===== F6 气象菜单（v2.0.13 横版 · 可拖动 · 深空色系） =====
 	private void OnGUI()
 	{
 		if (!menuOpen || !TyphoonConfig.I.hud)
@@ -820,13 +930,16 @@ public class TyphoonManager : MonoBehaviour
 			return;
 		}
 		float bw = 680f;
-		float bh = 268f;
+		float bh = 390f;   // v2.3.8.8 — 7 类型网格 3 行修复后内容到底 ~422px，360 太紧 → 390
 		float baseX = ((float)Screen.width - bw) * 0.5f;
 		float baseY = 70f;
 		Rect w = new Rect(baseX + menuOffset.x, baseY + menuOffset.y, bw, bh);
 		Event e = Event.current;
-		
-		if (e.type == EventType.MouseDown && e.button == 0 && new Rect(w.x, w.y, bw, 34f).Contains(e.mousePosition))
+		// v2.0.13 — 拖动：按住标题栏移动。
+		// v2.3.9 — 修复关闭按钮无响应（用户：指挥中心关闭按钮无法发挥作用）：拖动热区
+		// 原覆盖整个标题栏（含右上角关闭按钮），MouseDown 先命中热区 e.Use() 消费事件，
+		// 按钮永远收不到点击。热区排除右侧 80px（关闭按钮区域）。
+		if (e.type == EventType.MouseDown && e.button == 0 && new Rect(w.x, w.y, bw - 80f, 34f).Contains(e.mousePosition))
 		{
 			menuDragging = true;
 			menuGrabDelta = e.mousePosition - new Vector2(w.x, w.y);
@@ -842,34 +955,54 @@ public class TyphoonManager : MonoBehaviour
 			menuDragging = false;
 			e.Use();
 		}
-		
-		GUIStyle box = new GUIStyle(GUI.skin.box);
-		box.alignment = TextAnchor.UpperLeft;
-		box.fontSize = 12;
-		box.normal.background = DeepSpaceTex();
-		box.border = new RectOffset(8, 8, 8, 8);
+		// 深空色系背景（v2.3.8 优化#2 — GUIStyle 缓存）
+		if (mBox == null)
+		{
+			mBox = new GUIStyle(GUI.skin.box);
+			mBox.alignment = TextAnchor.UpperLeft;
+			mBox.fontSize = 12;
+			mBox.font = CnFont();   // v2.3.8.6 — 中文字体（原方块）
+			mBox.normal.background = DeepSpaceTex();
+			mBox.border = new RectOffset(8, 8, 8, 8);
+		}
+		GUIStyle box = mBox;
 		GUI.Box(w, GUIContent.none, box);
 		float x = w.x + 14f;
 		float y = w.y + 10f;
-		GUIStyle title = new GUIStyle(GUI.skin.label);
-		title.fontSize = 17;
-		title.fontStyle = FontStyle.Bold;
-		title.normal.textColor = new Color(0.72f, 0.86f, 1f);
-		GUI.Label(new Rect(x, y, 420f, 24f), "🌪 气象指挥中心", title);
-		GUIStyle small = new GUIStyle(GUI.skin.label);
-		small.fontSize = 11;
-		small.normal.textColor = new Color(0.52f, 0.64f, 0.8f);
+		if (mTitle == null)
+		{
+			mTitle = new GUIStyle(GUI.skin.label);
+			mTitle.fontSize = 17;
+			mTitle.fontStyle = FontStyle.Bold;
+			mTitle.font = CnFont();
+			mTitle.normal.textColor = new Color(0.72f, 0.86f, 1f);
+		}
+		GUIStyle title = mTitle;
+		GUI.Label(new Rect(x, y, 420f, 24f), "◆ 气象指挥中心", title);
+		if (mSmall == null)
+		{
+			mSmall = new GUIStyle(GUI.skin.label);
+			mSmall.fontSize = 11;
+			mSmall.font = CnFont();
+			mSmall.normal.textColor = new Color(0.52f, 0.64f, 0.8f);
+		}
+		GUIStyle small = mSmall;
 		GUI.Label(new Rect(x + 170f, y + 8f, 420f, 18f), "点击类型即刻召唤 · 拖标题栏可移动", small);
-		GUIStyle btn = new GUIStyle(GUI.skin.button);
-		btn.fontSize = 12;
-		btn.normal.textColor = new Color(0.82f, 0.91f, 1f);
+		if (mBtn == null)
+		{
+			mBtn = new GUIStyle(GUI.skin.button);
+			mBtn.fontSize = 12;
+			mBtn.font = CnFont();
+			mBtn.normal.textColor = new Color(0.82f, 0.91f, 1f);
+		}
+		GUIStyle btn = mBtn;
 		if (GUI.Button(new Rect(w.x + w.width - 64f, y, 50f, 22f), "关闭", btn))
 		{
 			menuOpen = false;
 			return;
 		}
 		y += 32f;
-		
+		// 类型网格：3 列 × 3 行（7 类型 ceil(7/3)=3 行，按钮含名称 + 简介两行）——v2.2（终审🟢-11）注释修正
 		float cw = 208f;
 		float ch = 52f;
 		float gapX = 10f;
@@ -881,36 +1014,82 @@ public class TyphoonManager : MonoBehaviour
 			float bx = x + col * (cw + gapX);
 			float by = y + row * (ch + 8f);
 			bool sel = i == selectedType;
-			GUIStyle tb = new GUIStyle(sel ? GUI.skin.box : GUI.skin.button);
-			tb.fontSize = 13;
-			tb.fontStyle = FontStyle.Bold;
-			tb.alignment = TextAnchor.MiddleCenter;
-			tb.normal.textColor = sel ? new Color(0.55f, 0.86f, 1f) : new Color(0.85f, 0.92f, 1f);
+			// v2.3.8 优化#2 — tb 两态缓存（循环内不再每帧 new）
+			if (mTbSel == null)
+			{
+				mTbSel = new GUIStyle(GUI.skin.box);
+				mTbSel.fontSize = 13;
+				mTbSel.fontStyle = FontStyle.Bold;
+				mTbSel.alignment = TextAnchor.MiddleCenter;
+				mTbSel.font = CnFont();
+				mTbSel.normal.textColor = new Color(0.55f, 0.86f, 1f);
+			}
+			if (mTb == null)
+			{
+				mTb = new GUIStyle(GUI.skin.button);
+				mTb.fontSize = 13;
+				mTb.fontStyle = FontStyle.Bold;
+				mTb.alignment = TextAnchor.MiddleCenter;
+				mTb.font = CnFont();
+				mTb.normal.textColor = new Color(0.85f, 0.92f, 1f);
+			}
+			GUIStyle tb = sel ? mTbSel : mTb;
 			if (GUI.Button(new Rect(bx, by, cw, ch), WeatherSystem.Spec[i].name + "\n" + WeatherSystem.Spec[i].desc, tb))
 			{
 				selectedType = i;
 				Location loc = GetPlayerLocation();
 				if (loc != null && loc.planet != null)
 				{
-					SpawnSystem((StormType)i, loc, TyphoonConfig.I.spawnLeadDistanceMeters, 0);
+					// v2.2.7 — F6 召唤偏移视距自适应（用户：放台风从左到右逐渐消失——原固定
+					// 60km 偏移超出 SFS 相机可视距离（far clip），风暴近侧可见、远侧被裁 →
+					// 渐变消失）。保证召唤的风暴落在可视范围内（下限 4km、上限视距×0.55，
+					// 不超配置值）。
+					double leadF6 = TyphoonConfig.I.spawnLeadDistanceMeters;
+					try
+					{
+						double vdF6 = ((Obs<float>)(object)WorldView.main.viewDistance).Value;
+						leadF6 = Math.Min(leadF6, Math.Max(4000.0, vdF6 * 0.55));
+					}
+					catch
+					{
+					}
+					SpawnSystem((StormType)i, loc, leadF6, 0);
 				}
 			}
 		}
-		y += 2 * (ch + 8f) + 12f;
-		
-		GUI.Label(new Rect(x, y - 8f, bw - 28f, 2f), "", new GUIStyle(GUI.skin.label) { normal = new GUIStyleState { background = SolidLine() } });
-		
+		// v2.3.8.8 — 修复沙尘暴与下方按钮重叠（用户：沙尘暴选项和下方的按钮重叠了）：
+		// 网格按 col=i%3, row=i/3 排列，7 类型 = 3 行，但 y 只推进 2 行高度（2*(ch+8)）——
+		// 第 3 行（沙尘暴）正好压到分隔线/操作按钮上。改按实际行数推进（ceil(n/3)）。
+		y += ((n + 2) / 3) * (ch + 8f) + 12f;
+		// 分隔线（v2.3.8 优化#2 — GUIStyle + GUIStyleState 缓存，原每帧 new 两个）
+		if (mLine == null)
+		{
+			mLine = new GUIStyle(GUI.skin.label);
+			mLine.font = CnFont();
+			mLine.normal.background = SolidLine();
+		}
+		GUI.Label(new Rect(x, y - 8f, bw - 28f, 2f), "", mLine);
+		// 操作行（作用于底部监控面板选中的系统）——v2.1.2 两行：行1 现象添加，行2 全局操作
 		float opW = 122f;
 		float opGap = 8f;
-		if (GUI.Button(new Rect(x, y, opW, 24f), "🌀 加龙卷", btn))
+		if (GUI.Button(new Rect(x, y, opW, 24f), "加龙卷", btn))
 		{
 			AddPhenomenon(1);
 		}
-		if (GUI.Button(new Rect(x + (opW + opGap), y, opW, 24f), "💨 加下击暴流", btn))
+		if (GUI.Button(new Rect(x + (opW + opGap), y, opW, 24f), "加下暴", btn))
 		{
 			AddPhenomenon(2);
 		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 2f, y, opW, 24f), "清除附属", btn))
+		if (GUI.Button(new Rect(x + (opW + opGap) * 2f, y, opW, 24f), "加阵风锋", btn))   // v2.1.2
+		{
+			AddPhenomenon(3);
+		}
+		if (GUI.Button(new Rect(x + (opW + opGap) * 3f, y, opW, 24f), "加闪电", btn))     // v2.1.2
+		{
+			AddPhenomenon(4);
+		}
+		y += 32f;
+		if (GUI.Button(new Rect(x, y, opW, 24f), "清除附属", btn))
 		{
 			if (selected != null && selected.active)
 			{
@@ -922,11 +1101,11 @@ public class TyphoonManager : MonoBehaviour
 				Msg("请先在底部监控面板选中一个风暴");
 			}
 		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 3f, y, opW, 24f), "全部分散", btn))
+		if (GUI.Button(new Rect(x + (opW + opGap), y, opW, 24f), "全部分散", btn))
 		{
 			DespawnAll();
 		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 4f, y, opW, 24f), "风眼对准", btn))
+		if (GUI.Button(new Rect(x + (opW + opGap) * 2f, y, opW, 24f), "风眼对准", btn))
 		{
 			if (selected != null && selected.active)
 			{
@@ -939,7 +1118,7 @@ public class TyphoonManager : MonoBehaviour
 			}
 		}
 		y += 32f;
-		
+		// 底部信息：选中系统状态
 		string info;
 		if (selected != null && selected.active)
 		{
@@ -952,13 +1131,19 @@ public class TyphoonManager : MonoBehaviour
 		{
 			info = "未选中系统 — 在底部监控面板点击风暴后，方可添加龙卷 / 下击暴流";
 		}
-		GUIStyle infoSt = new GUIStyle(GUI.skin.label);
-		infoSt.fontSize = 12;
-		infoSt.normal.textColor = new Color(0.78f, 0.88f, 1f);
+		// v2.3.8 优化#2 — infoSt 缓存
+		if (mInfo == null)
+		{
+			mInfo = new GUIStyle(GUI.skin.label);
+			mInfo.fontSize = 12;
+			mInfo.font = CnFont();
+			mInfo.normal.textColor = new Color(0.78f, 0.88f, 1f);
+		}
+		GUIStyle infoSt = mInfo;
 		GUI.Label(new Rect(x, y, bw - 28f, 20f), info, infoSt);
 	}
 
-	
+	// v2.0.13 — 附属现象统一入口：强制基于底部面板选中系统 + 类型检测。
 	private void AddPhenomenon(int kind)
 	{
 		if (selected == null || !selected.active)
@@ -970,26 +1155,48 @@ public class TyphoonManager : MonoBehaviour
 		{
 			if (selected.AddTornado())
 			{
-				Msg("🌀 已为 " + WeatherSystem.TypeName(selected.type) + " 添加龙卷");
+				Msg("已为 " + WeatherSystem.TypeName(selected.type) + " 添加龙卷");
 			}
 			else
 			{
 				Msg("✖ " + WeatherSystem.TypeName(selected.type) + " 无法产生龙卷（仅 超级单体 / 飑线 / MCS 可挂载）");
 			}
 		}
-		else if (kind == 2)
+	else if (kind == 2)
+	{
+		// v2.0.93 — 下暴宿主白名单（用户：禁用台风/单体/多单体生成下击暴流）
+		if (selected.AddDownburst())
 		{
-			
-			if (selected.AddDownburst())
-			{
-				Msg("💨 已为 " + WeatherSystem.TypeName(selected.type) + " 添加下击暴流");
-			}
-			else
-			{
-				Msg("✖ " + WeatherSystem.TypeName(selected.type) + " 无法产生下击暴流（仅 超级单体 / 飑线 / MCS 可挂载）");
-			}
+			Msg("已为 " + WeatherSystem.TypeName(selected.type) + " 添加下击暴流");
+		}
+		else
+		{
+			Msg("✖ " + WeatherSystem.TypeName(selected.type) + " 无法产生下击暴流（仅 超级单体 / 飑线 / MCS 可挂载）");
 		}
 	}
+	else if (kind == 3)   // v2.1.2 — 阵风锋
+	{
+		if (selected.AddGustFront())
+		{
+			Msg("已为 " + WeatherSystem.TypeName(selected.type) + " 添加阵风锋");
+		}
+		else
+		{
+			Msg("✖ " + WeatherSystem.TypeName(selected.type) + " 无法产生阵风锋（仅 超级单体 / 飑线 / MCS 可挂载）");
+		}
+	}
+	else if (kind == 4)   // v2.1.2 — 闪电风暴
+	{
+		if (selected.AddLightningBurst())
+		{
+			Msg("已为 " + WeatherSystem.TypeName(selected.type) + " 添加闪电风暴");
+		}
+		else
+		{
+			Msg("✖ 无法添加闪电风暴");
+		}
+	}
+}
 
 	private static Texture2D deepSpaceTex;
 
@@ -1015,6 +1222,27 @@ public class TyphoonManager : MonoBehaviour
 			lineTex.Apply();
 		}
 		return lineTex;
+	}
+
+	// v2.3.8.6 — UI 中文字体（用户：找 UI 问题——SFS 默认字体 FuturaPTBook SDF 无中文
+	// 字形，HUD/菜单全部中文显示方块 □，日志 \u8D28 was not found 刷屏）。运行时从 OS
+	// 加载中文字体（微软雅黑/黑体等），失败回退默认字体（不崩）。static 缓存只建一次。
+	private static Font cnFont;
+
+	public static Font CnFont()
+	{
+		if (cnFont == null)
+		{
+			try
+			{
+				cnFont = Font.CreateDynamicFontFromOSFont(new string[] { "Microsoft YaHei", "微软雅黑", "SimHei", "黑体", "Noto Sans CJK SC" }, 14);
+			}
+			catch
+			{
+				cnFont = null;
+			}
+		}
+		return cnFont;
 	}
 
 	public void DespawnAll()
