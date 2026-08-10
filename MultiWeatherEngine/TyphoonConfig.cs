@@ -47,6 +47,9 @@ public class TyphoonConfig
 
 	public bool visuals = true;
 
+	// v2.2.1 — 地图标记（M 地图视图显示风暴点+标签）：
+	public bool mapMarkers = true;
+
 	public int canopyPuffs = 1500;
 
 	public int cloudPuffs = 1100;
@@ -82,6 +85,11 @@ public class TyphoonConfig
 	public float naturalSpawnMinSec = 30f;     // 生成最小间隔（秒）
 	public float naturalSpawnMaxSec = 70f;     // 生成最大间隔（秒）
 	public float naturalSpawnDistKm = 62f;     // 生成距离范围（km，距玩家 12km~此值）
+
+	// v2.2.1 — 预生成（进存档/换星球时给当前行星播种，世界一进去就是活的）：
+	public bool preSpawnEnabled = true;        // 预生成开关
+	public int preSpawnCountPerPlanet = 2;     // 当前行星预生成数量（0 = 关）
+	public float preSpawnTyphoonChance = 0.15f; // 台风占比（低，台风是大事件）
 
 	public static void Load(string modFolder)
 	{

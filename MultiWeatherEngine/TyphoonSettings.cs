@@ -92,6 +92,8 @@ public static class TyphoonSettings
 	{
 		Section(box, w, "界面");
 		ToggleRow(box, w, "HUD 显示", () => TyphoonConfig.I.hud, delegate (bool v) { TyphoonConfig.I.hud = v; });
+		// v2.2.1 — 地图标记（M 地图视图显示风暴）
+		ToggleRow(box, w, "地图标记风暴", () => TyphoonConfig.I.mapMarkers, delegate (bool v) { TyphoonConfig.I.mapMarkers = v; });
 		ToggleRow(box, w, "风暴视觉效果", () => TyphoonConfig.I.visuals, delegate (bool v) { TyphoonConfig.I.visuals = v; });
 		ToggleRow(box, w, "闪电", () => TyphoonConfig.I.lightning, delegate (bool v) { TyphoonConfig.I.lightning = v; });
 		Section(box, w, "相机");
@@ -112,6 +114,11 @@ public static class TyphoonSettings
 		NumRow(box, w, "最小间隔 (秒)", TyphoonConfig.I.naturalSpawnMinSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMinSec = Mathf.Clamp(v, 5f, 600f); });
 		NumRow(box, w, "最大间隔 (秒)", TyphoonConfig.I.naturalSpawnMaxSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMaxSec = Mathf.Clamp(v, 10f, 1200f); });
 		NumRow(box, w, "生成距离 (km)", TyphoonConfig.I.naturalSpawnDistKm, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnDistKm = Mathf.Clamp(v, 15f, 500f); });
+		// v2.2.1 — 预生成（进存档/换星球时给当前行星播种）
+		Section(box, w, "预生成（进存档播种）");
+		ToggleRow(box, w, "预生成", () => TyphoonConfig.I.preSpawnEnabled, delegate (bool v) { TyphoonConfig.I.preSpawnEnabled = v; });
+		NumRow(box, w, "每行星数量", (float)TyphoonConfig.I.preSpawnCountPerPlanet, 1f, delegate (float v) { TyphoonConfig.I.preSpawnCountPerPlanet = Mathf.RoundToInt(Mathf.Clamp(v, 0f, 5f)); });
+		NumRow(box, w, "台风概率 (%)", TyphoonConfig.I.preSpawnTyphoonChance * 100f, 5f, delegate (float v) { TyphoonConfig.I.preSpawnTyphoonChance = Mathf.Clamp(v / 100f, 0f, 1f); });
 		Section(box, w, "影响");
 		ToggleRow(box, w, "影响宇航员", () => TyphoonConfig.I.affectAstronauts, delegate (bool v) { TyphoonConfig.I.affectAstronauts = v; });
 		// v2.2 — 快捷键说明（只读，玩家易忽略）

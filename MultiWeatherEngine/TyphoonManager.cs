@@ -4,6 +4,7 @@ using SFS;
 using SFS.UI;
 using SFS.Variables;
 using SFS.World;
+using SFS.World.Maps;
 using SFS.WorldBase;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -52,6 +53,8 @@ public class TyphoonManager : MonoBehaviour
 	private static Vector2 menuGrabDelta;
 
 	private double lastWorldTime = double.NaN;
+
+	private string lastWorldKey = "";   // v2.2.1 — 世界变化检测（星球 codeName + 小时级 worldTime）
 
 	private float shakeCooldown;
 
@@ -135,6 +138,8 @@ public class TyphoonManager : MonoBehaviour
 		HandleInput();
 		AdvanceSystems();
 		NaturalSpawn();
+		CheckWorldChange();
+		DrawMapMarkers();
 		TryMergeAll();
 		ProbePlayer();
 		ApplyShake();
@@ -489,6 +494,117 @@ public class TyphoonManager : MonoBehaviour
 		StormType t = (UnityEngine.Random.value < 0.55f) ? StormType.Cell : ((UnityEngine.Random.value < 0.7f) ? StormType.Multicell : StormType.Supercell);
 		double lead = (double)UnityEngine.Random.Range(12000f, Mathf.Max(12001f, TyphoonConfig.I.naturalSpawnDistKm * 1000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
 		SpawnSystem(t, loc, lead, 0, true);   // v2.0.88 — 自然生成静默（不弹提示）
+	}
+
+	// ===== v2.2.1 — 预生成：进存档/换星球时给当前行星播种（世界一进去就是活的） =====
+	// 世界变化双信号：玩家星球 codeName 变（换星球）或小时级 worldTime 变（重进存档归零）。
+	// 只处理玩家当前行星（用户选定：不全局播种，系统数可控不爆 MaxSystems）。
+	private void CheckWorldChange()
+	{
+		try
+		{
+			if (!TyphoonConfig.I.preSpawnEnabled || TyphoonConfig.I.preSpawnCountPerPlanet <= 0)
+			{
+				return;
+			}
+			Location pl = GetPlayerLocation();
+			if (pl == null || (Object)pl.planet == (Object)null)
+			{
+				return;
+			}
+			double wt = 0.0;
+			WorldTime vwt = WorldTime.main;
+			if ((Object)vwt != (Object)null)
+			{
+				wt = vwt.worldTime;
+			}
+			string key = pl.planet.codeName + "_" + ((long)(wt / 3600.0)).ToString();
+			if (key == lastWorldKey)
+			{
+				return;
+			}
+			lastWorldKey = key;
+			PreSpawnCurrentPlanet(pl);
+		}
+		catch
+		{
+		}
+	}
+
+	private void PreSpawnCurrentPlanet(Location pl)
+	{
+		if (!pl.planet.HasAtmospherePhysics)
+		{
+			return;
+		}
+		int cur = 0;
+		for (int i = 0; i < systems.Count; i++)
+		{
+			if (systems[i] != null && systems[i].active && (Object)systems[i].planet == (Object)pl.planet)
+			{
+				cur++;
+			}
+		}
+		int need = TyphoonConfig.I.preSpawnCountPerPlanet - cur;
+		for (int n = 0; n < need; n++)
+		{
+			if (systems.Count >= MaxSystems)
+			{
+				break;
+			}
+			// 类型：对流为主（Cell/Multicell/Supercell），台风概率 preSpawnTyphoonChance。
+			float r = UnityEngine.Random.value;
+			StormType t = (r < TyphoonConfig.I.preSpawnTyphoonChance) ? StormType.Typhoon
+				: ((r < TyphoonConfig.I.preSpawnTyphoonChance + 0.55f) ? StormType.Cell
+				: ((r < TyphoonConfig.I.preSpawnTyphoonChance + 0.8f) ? StormType.Multicell : StormType.Supercell));
+			// 距离 40-140km 沿经度偏移（避开玩家视线 ±20°，比自然生成的 12-62km 更远，不"贴脸"出现）。
+			double lead = (double)UnityEngine.Random.Range(40000f, 140000f) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
+			SpawnSystem(t, pl, lead, 0, true);
+		}
+	}
+
+	// ===== v2.2.1 — 地图标记：M 地图视图显示风暴点+文字标签（颜色=强度色） =====
+	// 走 SFS.World.Maps：MapDrawer.DrawPointWithText（点+文字一步），位置 = 风暴中心
+	// 行星局部坐标 → GetPosition（mapHolder + pos/1000）。节流 1s 防闪烁/费性能。
+	private float mapMarkerTimer = 0f;
+
+	private void DrawMapMarkers()
+	{
+		if (!TyphoonConfig.I.mapMarkers)
+		{
+			return;
+		}
+		mapMarkerTimer -= Time.deltaTime;
+		if (mapMarkerTimer > 0f)
+		{
+			return;
+		}
+		mapMarkerTimer = 1f;
+		try
+		{
+			// 判空保护：未进世界/地图系统未初始化时 elementDrawer 为 null。
+			if (Map.manager == null || !Map.manager.mapMode.Value || Map.elementDrawer == null)
+			{
+				return;
+			}
+			for (int i = 0; i < systems.Count; i++)
+			{
+				WeatherSystem s = systems[i];
+				if (s == null || !s.active || (Object)s.planet == (Object)null)
+				{
+					continue;
+				}
+				Double2 c = s.MergedStormC();
+				Vector2 pos = (Vector2)MapDrawer.GetPosition(s.planet, c);
+				Color col = Category.Tint[s.category];
+				string txt = WeatherSystem.TypeName(s.type) + "C" + s.category + " " + (WeatherSystem.Clamp01(s.energy / 80.0) * 100.0).ToString("0") + "%";
+				Vector2 normal = (Vector2)c.normalized;
+				MapDrawer.DrawPointWithText(16, col, txt, 12, col, pos, normal, 0, 0);
+			}
+		}
+		catch
+		{
+		}
 	}
 
 	// ===== 合并：大吞小（v2.0.51 加合并动画：不再瞬间移除） =====
