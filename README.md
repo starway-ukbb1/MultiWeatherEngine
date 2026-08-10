@@ -2,7 +2,7 @@
 
 Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成、演化、移动、合并与类型转变，真实风场 / 降雨 / 龙卷 / 下击暴流 / 沙尘暴，全程可交互。
 
-> 当前公开版本 **v2.2**（内部 v2.4.6，接续已发布的 v2.1.0）。本 mod 由 AI 辅助设计制作。
+> 当前公开版本 **v2.2**。本 mod 由 AI 辅助设计制作。
 
 ---
 
@@ -34,11 +34,6 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
 
 ## 二、安装
 
-### 前置依赖
-
-- 游戏：Spaceflight Simulator（Steam 版）
-- **[UITools](https://github.com/StefMorojna/Spaceflight-Simulator-UITools)**（可选，但强烈建议）—— 提供 SFS 设置页支持。不装也能玩，只是设置项不可调（默认值生效）
-
 ### 步骤
 
 1. 下载本仓库 `MultiWeatherEngine.dll`（Release 页附件）或自行构建（见「从源码构建」）
@@ -48,8 +43,6 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
    ```
    > 若同时装了 UITools，确保 `UITools.dll` 在 `Mods\UITools\` 下
 3. 启动游戏，进入一个世界（存档），按 **F6** 打开气象菜单
-
-> ⚠️ 升级前请先退出游戏；旧版本目录请移除（同 ID 模组重复加载会冲突）。
 
 ---
 
@@ -72,12 +65,6 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
 3. 左上详情面板：阶段 / 能量 / 等级 / 峰值风 / 云底云顶 / 移速 / 地形 / 海温（台风）/ 本地风 / 风圈 / 附属现象
 4. 菜单内"加龙卷 / 加下暴 / 加阵风锋 / 加闪电"为选中的系统附加现象
 5. 选中系统按 **F8** 手动强化（可越过自然上限，god mode）
-
-### HUD 解读
-
-- `成熟 能量 78%  升↗12%` —— 能量是**阶段内重定标**的：成熟期 80 = 100%（峰值），下降 = 快消散了；`升↗` 是自然升级进度
-- `⚠超限` —— 该等级超过此类型自然上限（F8 手动越限），仍会正常走能量寿命
-- 台风消散期名称变为 `残余低压` —— 逗点化云型 + 消散延长，象征残余环流持续降雨
 
 ---
 
@@ -126,38 +113,6 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
 - 消散产物：台风变性残余低压、冷池出流、沙尘沉降（泥雨）——均为现实消散链的"尾巴"
 
 **已知简化**（SFS 2D 限制）：行星无纬度/三维环流概念，风切变/湿度场省略；所有形态按**横截面**表达。
-
----
-
-## 七、从源码构建
-
-### 环境
-
-- .NET SDK（netstandard2.1）
-- 从游戏目录复制依赖 DLL 到 `lib\`：
-  - `Spaceflight Simulator_Data\Managed\` 下的 UnityEngine 系列
-  - 游戏本体 `Assembly-CSharp.dll`（或 `lib\` 已有）
-  - `0Harmony.dll`、`Newtonsoft.Json.dll`
-  - 设置页需要 `UITools.dll`（从 UITools mod 复制）
-
-### 构建
-
-```bash
-cd mod_src
-dotnet build -c Release
-# 输出：bin/netstandard2.1/MultiWeatherEngine.dll
-```
-
-### 部署
-
-```bash
-cp bin/netstandard2.1/MultiWeatherEngine.dll \
-   "<Steam>\...\Spaceflight Simulator Game\Mods\MultiWeatherEngine\MultiWeatherEngine.dll"
-```
-
-> 游戏运行时 DLL 被锁定，先退出游戏再覆盖。
-
----
 
 ## 八、版本历史
 
