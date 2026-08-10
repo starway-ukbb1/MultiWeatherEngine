@@ -422,8 +422,8 @@ public class TyphoonHud : MonoBehaviour
 		// v2.0.81 — HUD 区域标注与 11 区风场统一（用户：HUD 区跟实际台风统一吗——旧 Zone 是
 		// v2.0.13 随手 5 段 0.5/0.85/1.25/2.4/3.6，与 v2.0.77-79 的 11 区分段 0.7/1.2/1.6/2.2/3.0
 		// 完全错位：HUD 说“眼壁内缘”实际风已在“强·眼壁”，说“内雨带”实际在“较强+中”）。
-		// 现在直接调 WindZoneIndex（含 windZoneOffA/B 偏移）→ 显示 11 区名 + 区号，与 F1 面板一致。
-		double sWind = pS - (pS >= 0.0 ? (double)StormRenderer.windZoneOffA : (double)StormRenderer.windZoneOffB) * s.Rmax;
+		// 现在直接调 WindZoneIndex → 显示 11 区名 + 区号（v2.2 — 风区偏移调试已移除）。
+		double sWind = pS;
 		int zi = WeatherSystem.WindZoneIndex(sWind / s.Rmax);
 		return "[" + zi + "]" + StormRenderer.windZoneNames[zi];
 	}

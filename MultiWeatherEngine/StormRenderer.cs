@@ -164,12 +164,8 @@ public class StormRenderer : MonoBehaviour
 	public static float downburstZoneVert = 0.04f;   // 下暴垂直区（固化）
 	public static float tornadoZoneHoriz = 1f;       // 龙卷水平区（默认，不再热键调）
 	public static float tornadoZoneVert = 1f;        // 龙卷垂直区（默认）
-	// v2.0.70 — 风区位置偏移（半区 A/B，Rmax 单位，范围 ±3）：
-	public static float windZoneOffA = 0f;           // +s 侧风区位置偏移
-	public static float windZoneOffB = 0f;           // −s 侧风区位置偏移
-	public static bool windZoneHalf;                 // false=A(+s侧) true=B(−s侧)
-	public static bool windZoneFine;                 // false=粗(±0.2) true=细(±0.05)
-	public static bool downburstZoneShow;            // Shift+F2 — 显示/隐藏区域黑框
+	// v2.2 — 调试字段（windZoneOffA/B、windZoneHalf/Fine、downburstZoneShow）与 F2-F5/Shift+F2
+	// 调试按键已全部移除（用户：清理调试按键）。风区采样不再平移偏移。
 
 	// v2.0.77 — 11 区加强系数（用户：面板里搞加强系数，11 个区）：
 	// 径向剖面分 11 段（弱-较弱-中-较强-强(眼壁)-弱(风眼)-强(眼壁)-较强-中-较弱-弱），
@@ -1964,84 +1960,14 @@ public class StormRenderer : MonoBehaviour
 				}
 			}
 		}
-		// v2.0.80 — 11 区分段边界黑框（Shift+F2，替代 v2.0.70 风区位置框——旧框画
-		// windZoneOffA/B 偏移框，与 v2.0.77 的 11 区系数 windZoneGain 完全无关，调面板黑框
-		// 不动 = 渲染与逻辑解耦）。新：沿切向轴在 11 区分段边界 sR=±0.7/±1.2/±1.6/±2.2/±3.0
-		// 各画一条径向竖线（线位含 windZoneOffA/B 偏移，与实际风力分段严格一致）：
-		// 眼壁边界（±0.7/±1.2）实线亮 alpha 0.95、外围边界（±1.6/±2.2/±3.0）淡 alpha 0.45。
-		if (downburstZoneShow && S != null && S.planet != null && num2 + 20 < phenomenaQuads)
-		{
-			Double2 cZone = S.MergedStormC();
-			Double2 radialP = cZone.normalized;
-			Double2 pDir = new Double2(0.0 - radialP.y, radialP.x);
-			double[] bounds = { 0.7, 1.2, 1.6, 2.2, 3.0 };
-			for (int bi = 0; bi < 5; bi++)
-			{
-				float al = (bi < 2) ? 0.95f : 0.45f;
-				// +s 侧边界：sR=bound → 实际 s = (bound + offA)×Rmax；−s 侧：−(bound + offB)×Rmax
-				DrawZoneTick(cZone, pDir, (bounds[bi] + (double)StormRenderer.windZoneOffA) * S.Rmax, S.Rmax, al, align, phenomenaQuads, ref num2);
-				DrawZoneTick(cZone, pDir, (0.0 - (bounds[bi] + (double)StormRenderer.windZoneOffB)) * S.Rmax, S.Rmax, al, align, phenomenaQuads, ref num2);
-			}
-			// v2.0.83 — 风圈线（用户：7/10/12 级风圈概念）：在当前风场配置下各等级风圈
-			// 最远半径处画边界线（两侧各一条）——7 级亮、10 级中、12 级亮（眼壁级狂风圈）。
-			// 半径基于 |sR| 分布（含 windZoneOffA/B 偏移，与 11 区边界线同一坐标系）。
-			double[] crs = { S.WindCircleRoCached(13.9), S.WindCircleRoCached(24.5), S.WindCircleRoCached(32.7) };   // v2.1.1 — 缓存版
-			float[] cal = { 0.95f, 0.6f, 0.95f };
-			for (int ci = 0; ci < 3; ci++)
-			{
-				if (crs[ci] > 0.25)
-				{
-					DrawZoneTick(cZone, pDir, (crs[ci] + (double)StormRenderer.windZoneOffA) * S.Rmax, S.Rmax, cal[ci], align, phenomenaQuads, ref num2);
-					DrawZoneTick(cZone, pDir, (0.0 - (crs[ci] + (double)StormRenderer.windZoneOffB)) * S.Rmax, S.Rmax, cal[ci], align, phenomenaQuads, ref num2);
-				}
-			}
-		}
+		// v2.2 — 11 区分段黑框 / 风圈线调试绘制（Shift+F2）已移除（用户：清理调试按键）。
+		// 风圈信息仍由 HUD 文字显示（风圈 7级≈xx km 等）。
 		// v2.0.35 — 图层反转后 puffs 写入 index i+phenomenaQuads（后部），附属现象占 index 0..phenomenaQuads-1，
 		// 全部 backQuads 都被填满（puffs.Length+phenomenaQuads == backQuads）→ 隐藏起点=backQuads（无未用顶点）。
 		HideRest(A.bV, A.bC, puffs.Length + phenomenaQuads, A.backQuads);
 	}
 
-	// v2.0.60 — 下暴区域调试黑框（矩形）：以 center 为中心、半长 halfLen 的正方形线框，
-	// 边沿行星径向（rDir）与切向（pDir）；四条边各画一个细长黑色 quad。
-	private void DrawZoneRect(Double2 center, double halfLen, float alpha, bool align, int quadCap, ref int num2)
-	{
-		Vector2 cLocal = WorldView.ToLocalPosition(center);
-		Vector2 c0 = cLocal;
-		Double2 radialP = center.normalized;
-		Vector2 rDir = new Vector2((float)radialP.x, (float)radialP.y);
-		Vector2 pDir = new Vector2(0f - rDir.y, rDir.x);
-		float L = (float)halfLen;
-		Vector2 p0 = c0 + rDir * L + pDir * L;
-		Vector2 p1 = c0 + rDir * L - pDir * L;
-		Vector2 p2 = c0 - rDir * L - pDir * L;
-		Vector2 p3 = c0 - rDir * L + pDir * L;
-		float halfW = L * 0.008f;   // 线宽 = 半长 0.8%
-		DrawEdge(p0, p1, halfW, alpha, align, quadCap, ref num2);
-		DrawEdge(p1, p2, halfW, alpha, align, quadCap, ref num2);
-		DrawEdge(p2, p3, halfW, alpha, align, quadCap, ref num2);
-		DrawEdge(p3, p0, halfW, alpha, align, quadCap, ref num2);
-	}
-
-	private void DrawEdge(Vector2 a, Vector2 b, float halfW, float alpha, bool align, int quadCap, ref int num2)
-	{
-		if (num2 >= quadCap)
-		{
-			return;
-		}
-		Vector2 mid = (a + b) * 0.5f;
-		Vector2 axis = (b - a).normalized;
-		float halfH = (b - a).magnitude * 0.5f;
-		Vector2 qc = align ? (mid - alignOrigin) : mid;
-		float hw = halfW;
-		float hh = halfH;
-		if (farAbs)
-		{
-			qc = (mid - alignOrigin) * (farAbsS / 10000f);
-			hw = hw * farAbsS / 10000f;
-			hh = hh * farAbsS / 10000f;
-		}
-		WriteQuad(A.bV, A.bT, A.bC, num2++, qc, hw, hh, axis, new Color(0f, 0f, 0f, alpha), 0f);
-	}
+	// v2.2 — 调试黑框绘制（DrawZoneRect/DrawEdge/DrawZoneTick）已移除（用户：清理调试按键）。
 
 	// v2.0.85 — 附属现象实例锚点（行星全局）：合并动画中心 + 切向偏移（sOff×Rmax，沿经度方向）。
 	// 多实例龙卷/下暴各自独立位置（随机合适位置生成，数量限制解除）。
@@ -2051,21 +1977,6 @@ public class StormRenderer : MonoBehaviour
 		Double2 rp = c.normalized;
 		Double2 pd = new Double2(0.0 - rp.y, rp.x);
 		return c + pd * (fx.sOff * s.Rmax);
-	}
-
-	// v2.0.80 — 11 区分段边界线：在切向位置 sPos（距风暴中心，米）画一条沿径向延伸的
-	// 细长黑线，标出该 11 区分段边界在台风上的实际位置（与 WindZoneIndex 一致，含偏移）。
-	private void DrawZoneTick(Double2 center, Double2 pDir, double sPos, double Rmax, float alpha, bool align, int quadCap, ref int num2)
-	{
-		Double2 pos = center + pDir * sPos;
-		Vector2 cLocal = WorldView.ToLocalPosition(pos);
-		Double2 radialP = pos.normalized;
-		Vector2 rDir = new Vector2((float)radialP.x, (float)radialP.y);
-		double lineHalf = Rmax * 1.5;   // 沿径向延伸 ±1.5Rmax
-		double lineW = Rmax * 0.03;     // 线宽 3% Rmax
-		Vector2 p0 = cLocal + rDir * (float)lineHalf;
-		Vector2 p1 = cLocal - rDir * (float)lineHalf;
-		DrawEdge(p0, p1, (float)(lineW * 0.5), alpha, align, quadCap, ref num2);
 	}
 
 	// v2.0.27 — 行星球面遮挡判定：视线从 camPos 到 p，若先与行星表面（半径 R）相交 → 被挡。

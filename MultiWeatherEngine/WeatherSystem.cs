@@ -2145,11 +2145,8 @@ public class WeatherSystem
 		// v2.1.1 — 风圈缓存刷新（与采样位置无关，指纹不变时零开销；原每采样重算 4×90 迭代）
 		RefreshWindCircles();
 		TypeSpec spec = Spec[(int)type];
-		// v2.0.70 — 风区位置移动（用户：F2-F5 移动风区位置，F2 切另一半）：主风场采样点
-		// 沿 s 平移（+s 侧用 windZoneOffA、−s 侧用 windZoneOffB，单位 Rmax）→ 风区两半
-		// 各自独立位置偏移（不对称风场，如真实台风右半圆更强）。num 原值仍用于下暴 dro/
-		// 龙卷 tro（附属现象锚定风暴中心，不随主风区偏移）；ro/edge 用偏移后的 numW。
-		double sWind = s - (s >= 0.0 ? (double)StormRenderer.windZoneOffA : (double)StormRenderer.windZoneOffB) * Rmax;
+		// v2.2 — 调试风区偏移（F2-F5）已移除，风场采样点不再平移（sWind = s）。
+		double sWind = s;
 		double numW = Math.Abs(sWind);
 		double ro = numW / Rmax;
 		double ht = Clamp01(Math.Max(0.0, h) / Htop);

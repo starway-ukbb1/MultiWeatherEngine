@@ -627,57 +627,7 @@ public class TyphoonManager : MonoBehaviour
 			Msg("活跃天气系统面板 " + (panelExpanded ? "展开" : "收起") + "（F9）");
 			return;
 		}
-		// v2.0.70 — F2/F3/F4/F5 风区位置移动（调试保留，不进键位提示）：F2 切换半区、
-		// Shift+F2 区域黑框、F3/F4 移动、F5 步进。
-		// v2.0.98 — F1 参数编辑面板已删除（用户要求）。
-		if (Input.GetKeyDown((KeyCode)283) && (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))) // Shift+F2 — 区域黑框开关
-		{
-			StormRenderer.downburstZoneShow = !StormRenderer.downburstZoneShow;
-			Msg("风区黑框 " + (StormRenderer.downburstZoneShow ? "显示" : "隐藏") + "（Shift+F2）");
-			return;
-		}
-		if (Input.GetKeyDown((KeyCode)283)) // F2 — 切换另一半风区
-		{
-			StormRenderer.windZoneHalf = !StormRenderer.windZoneHalf;
-			Msg("风区半区 -> " + (StormRenderer.windZoneHalf ? "B(−s侧)" : "A(+s侧)") + "  (A " + StormRenderer.windZoneOffA.ToString("0.00") + " B " + StormRenderer.windZoneOffB.ToString("0.00") + " Rmax)");
-			return;
-		}
-		if (Input.GetKeyDown((KeyCode)286)) // F5 — 粗细步进
-		{
-			StormRenderer.windZoneFine = !StormRenderer.windZoneFine;
-			Msg("风区步进 -> " + (StormRenderer.windZoneFine ? "细 (±0.05)" : "粗 (±0.2)"));
-			return;
-		}
-		if (Input.GetKeyDown((KeyCode)285)) // F4 — 当前半区风区位置增大（向 +s 移）
-		{
-			float step = StormRenderer.windZoneFine ? 0.05f : 0.2f;
-			if (StormRenderer.windZoneHalf)
-			{
-				StormRenderer.windZoneOffB = Mathf.Clamp(StormRenderer.windZoneOffB + step, -3f, 3f);
-				Msg("B 半区风区 -> " + StormRenderer.windZoneOffB.ToString("0.00") + " Rmax");
-			}
-			else
-			{
-				StormRenderer.windZoneOffA = Mathf.Clamp(StormRenderer.windZoneOffA + step, -3f, 3f);
-				Msg("A 半区风区 -> " + StormRenderer.windZoneOffA.ToString("0.00") + " Rmax");
-			}
-			return;
-		}
-		if (Input.GetKeyDown((KeyCode)284)) // F3 — 当前半区风区位置减小（向 −s 移）
-		{
-			float step = StormRenderer.windZoneFine ? 0.05f : 0.2f;
-			if (StormRenderer.windZoneHalf)
-			{
-				StormRenderer.windZoneOffB = Mathf.Clamp(StormRenderer.windZoneOffB - step, -3f, 3f);
-				Msg("B 半区风区 -> " + StormRenderer.windZoneOffB.ToString("0.00") + " Rmax");
-			}
-			else
-			{
-				StormRenderer.windZoneOffA = Mathf.Clamp(StormRenderer.windZoneOffA - step, -3f, 3f);
-				Msg("A 半区风区 -> " + StormRenderer.windZoneOffA.ToString("0.00") + " Rmax");
-			}
-			return;
-		}
+		// v2.2 — 调试按键（F2-F5 风区移动 / Shift+F2 区域黑框）已全部移除（用户要求清理）。
 	}
 
 	// v2.0.88 — silent=true：自然生成调用不弹 Msg（用户：自然生成风暴提示删除；手动保留）。
