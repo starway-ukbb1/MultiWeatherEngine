@@ -106,6 +106,18 @@ public static class TyphoonSettings
 		ToggleRow(box, w, "台风残余低压", () => TyphoonConfig.I.residualLow, delegate (bool v) { TyphoonConfig.I.residualLow = v; });
 		ToggleRow(box, w, "沙尘泥雨", () => TyphoonConfig.I.muddyRain, delegate (bool v) { TyphoonConfig.I.muddyRain = v; });
 		ToggleRow(box, w, "云底侵蚀", () => TyphoonConfig.I.cloudBaseErosion, delegate (bool v) { TyphoonConfig.I.cloudBaseErosion = v; });
+		// v2.2 — 自然生成（"随机刷新"参数）：开关 + 间隔 + 距离，免去玩家困惑"风暴从哪来"。
+		Section(box, w, "自然生成（随机刷新）");
+		ToggleRow(box, w, "自然生成", () => TyphoonConfig.I.naturalSpawn, delegate (bool v) { TyphoonConfig.I.naturalSpawn = v; });
+		NumRow(box, w, "最小间隔 (秒)", TyphoonConfig.I.naturalSpawnMinSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMinSec = Mathf.Clamp(v, 5f, 600f); });
+		NumRow(box, w, "最大间隔 (秒)", TyphoonConfig.I.naturalSpawnMaxSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMaxSec = Mathf.Clamp(v, 10f, 1200f); });
+		NumRow(box, w, "生成距离 (km)", TyphoonConfig.I.naturalSpawnDistKm, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnDistKm = Mathf.Clamp(v, 15f, 500f); });
+		Section(box, w, "影响");
+		ToggleRow(box, w, "影响宇航员", () => TyphoonConfig.I.affectAstronauts, delegate (bool v) { TyphoonConfig.I.affectAstronauts = v; });
+		// v2.2 — 快捷键说明（只读，玩家易忽略）
+		Section(box, w, "快捷键");
+		Builder.CreateLabel(box, w, 22, 0, 0, "F6 气象菜单  F7 解散选中  F8 强度+1");
+		Builder.CreateLabel(box, w, 22, 0, 0, "F9 系统面板  Shift+F7 隐藏 HUD");
 	}
 
 	private static void ParticleTab(Box box, int w)

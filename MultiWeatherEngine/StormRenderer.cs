@@ -138,48 +138,22 @@ public class StormRenderer : MonoBehaviour
 	public static float farTilt = 0f;           // 绕视线轴倾斜(弧度, 正=左；默认 0 用户要求去掉左倾)
 	public static float farDepthFrac = 0.012f;  // billboard 深度占近-远裁剪比例(保留字段，未参与计算)
 
-	// v2.0.34 — 下击暴流排线宽度（Rmax 倍数）。Shift+F3/F4 实时调间距，Shift+F5 切换粗细步进。
-	// v2.0.34 — 下击暴流排线宽度（间距），F3/F4/F5 实时调。
-	// v2.0.35 — 用户实测调完后固化默认 0.3 Rmax（原先 1.0 太大）。
-	public static float downburstGap = 0.3f;      // 排线宽（默认 0.3 Rmax，用户最终确认，热键已让给雨滴形状）
-	public static bool downburstGapFine = false; // 保留字段（热键移除）
+	// 下击暴流排线宽（Rmax 倍数，用户实测固化 0.3）。
+	public static float downburstGap = 0.3f;
 
-	// v2.0.48 — 雨滴形状编辑（F3/F4/F5 顶掉下暴间距热键）：
-	// F5 切换调节目标（长度↔宽度），F3/F4 增减当前目标（±0.05，范围 0.1-4）。
-	// v2.0.51 — 用户实测后固化默认：长 0.05、宽 0.1（短细雨丝）。
-	// v2.0.59 — F3/F4/F5 顶给下暴区域修正（用户：下暴区还是不行，手动调 + 黑框可视化）：
-	// F2 切换修正对象（水平区↔垂直区）、Shift+F2 显示/隐藏区域黑框、F3/F4 增减系数、F5 粗细步进。
-	public static float rainLenScale = 0.05f;       // 雨长倍率（用户最终确认 0.05，热键已让给下暴区）
-	public static float rainWidScale = 0.1f;        // 雨宽倍率（用户最终确认 0.1）
-	public static bool rainShapeTarget;           // 保留字段（热键移除）
+	// 雨滴形状（用户实测固化：长 0.05、宽 0.1 短细雨丝）。
+	public static float rainLenScale = 0.05f;       // 雨长倍率
+	public static float rainWidScale = 0.1f;        // 雨宽倍率
 
-	// v2.0.59 — 区域修正系数（F2 切对象、F3/F4 调、F5 步进、Shift+F2 黑框）。
-	// v2.0.61 — 系数下限 0.02。
-	// v2.0.62 — 下暴固化（用户实测）：垂直 0.04 / 水平 0.2；机制扩展给龙卷（4 态对象）。
-	// v2.0.70 — F2-F5 顶给风区位置移动（用户：实际风区能画吗 + 移动风区位置，F2 切换
-	// 另一半风区）——风区分两半（+s 侧 / −s 侧），各自独立位置偏移（单位 Rmax，沿 s
-	// 方向平移风区），黑框实时显示两半风区实际位置。原 zoneTarget 四对象系数停止热键调
-	// （字段保留默认值：下暴 0.04/0.2 固化、龙卷 1.0）。
-	public static float downburstZoneHoriz = 0.2f;   // 下暴水平区（固化，不再热键调）
-	public static float downburstZoneVert = 0.04f;   // 下暴垂直区（固化）
-	public static float tornadoZoneHoriz = 1f;       // 龙卷水平区（默认，不再热键调）
-	public static float tornadoZoneVert = 1f;        // 龙卷垂直区（默认）
-	// v2.2 — 调试字段（windZoneOffA/B、windZoneHalf/Fine、downburstZoneShow）与 F2-F5/Shift+F2
-	// 调试按键已全部移除（用户：清理调试按键）。风区采样不再平移偏移。
+	// 附属现象判定区（固化，不再热键调）：下暴水平 0.2/垂直 0.04、龙卷水平/垂直 1.0。
+	public static float downburstZoneHoriz = 0.2f;   // 下暴水平区
+	public static float downburstZoneVert = 0.04f;   // 下暴垂直区
+	public static float tornadoZoneHoriz = 1f;       // 龙卷水平区
+	public static float tornadoZoneVert = 1f;        // 龙卷垂直区
 
-	// v2.0.77 — 11 区加强系数（用户：面板里搞加强系数，11 个区）：
-	// 径向剖面分 11 段（弱-较弱-中-较强-强(眼壁)-弱(风眼)-强(眼壁)-较强-中-较弱-弱），
-	// 每段一个乘数（范围 0-5，默认 1.0）。Shift+F9 打开面板逐区调。
-	// 分段边界（sR，从 −s 侧到 +s 侧）：
-	//   0:(≤−2.2弱) 1:(−2.2,−1.5] 2:(−1.5,−1.15] 3:(−1.15,−0.85] 4:(−0.85,−0.45](强眼壁)
-	//   5:(−0.45,0.45] 风眼(弱) 6:(0.45,0.85](强眼壁) 7:(0.85,1.15] 8:(1.15,1.5]
-	//   9:(1.5,2.2] 10:(>2.2 弱)
-	// v2.0.85 — 默认 1.2（除风眼 [5] 保持 1.0）：用户要求 11 区除风眼外集体 ×1.2。
+	// 11 区加强系数（径向剖面 11 段，默认 1.2 除风眼 [5]=1.0；边界 sR 见 WindZoneIndex）。
 	public static float[] windZoneGain = new float[11] { 1.2f, 1.2f, 1.2f, 1.2f, 1.2f, 1.0f, 1.2f, 1.2f, 1.2f, 1.2f, 1.2f };
 	public static string[] windZoneNames = new string[11] { "外围弱", "较弱", "中", "较强", "强·眼壁", "风眼弱", "强·眼壁", "较强", "中", "较弱", "外围弱" };
-	public static bool windGainPanel;                // F1 — 11 区加强系数面板（独立、可拖动）
-	public static float gainPanelX = 16f;            // 面板位置（标题栏拖动）
-	public static float gainPanelY = 140f;
 
 	// v2.0.93 — 暖化压蓝（用户：背景还是蓝的，要其他色克下蓝色）：原 (0.11,0.12,0.17)/
 	// (0.34,0.36,0.46) B 通道最高 → 风暴灰布/云底色偏蓝。提 R 压 B → 黄褐暖调

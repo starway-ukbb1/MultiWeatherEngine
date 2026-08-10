@@ -450,7 +450,7 @@ public class TyphoonManager : MonoBehaviour
 	// ===== 自然生成：有大气行星上，随机时间在玩家附近触发单体 =====
 	private void NaturalSpawn()
 	{
-		if (systems.Count >= MaxSystems)
+		if (!TyphoonConfig.I.naturalSpawn || systems.Count >= MaxSystems)
 		{
 			return;
 		}
@@ -459,7 +459,8 @@ public class TyphoonManager : MonoBehaviour
 		{
 			return;
 		}
-		spawnTimer = 30f + UnityEngine.Random.Range(0f, 40f);
+		// v2.2 — 间隔/距离可调（设置页）：30-70s → min-max；12-62km → 12km~distKm
+		spawnTimer = TyphoonConfig.I.naturalSpawnMinSec + UnityEngine.Random.Range(0f, Mathf.Max(1f, TyphoonConfig.I.naturalSpawnMaxSec - TyphoonConfig.I.naturalSpawnMinSec));
 		Location loc = GetPlayerLocation();
 		if (loc == null || (Object)loc.planet == (Object)null || !loc.planet.HasAtmospherePhysics)
 		{
@@ -486,7 +487,7 @@ public class TyphoonManager : MonoBehaviour
 			return;
 		}
 		StormType t = (UnityEngine.Random.value < 0.55f) ? StormType.Cell : ((UnityEngine.Random.value < 0.7f) ? StormType.Multicell : StormType.Supercell);
-		double lead = (double)(12000f + UnityEngine.Random.Range(0f, 50000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
+		double lead = (double)UnityEngine.Random.Range(12000f, Mathf.Max(12001f, TyphoonConfig.I.naturalSpawnDistKm * 1000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
 		SpawnSystem(t, loc, lead, 0, true);   // v2.0.88 — 自然生成静默（不弹提示）
 	}
 

@@ -77,6 +77,12 @@ public class TyphoonConfig
 
 	public bool cloudBaseErosion = true;
 
+	// v2.2 — 自然生成（玩家易忽略的"随机刷新"参数，设置页可调）：
+	public bool naturalSpawn = true;           // 自然生成开关（关 = 只手动召唤）
+	public float naturalSpawnMinSec = 30f;     // 生成最小间隔（秒）
+	public float naturalSpawnMaxSec = 70f;     // 生成最大间隔（秒）
+	public float naturalSpawnDistKm = 62f;     // 生成距离范围（km，距玩家 12km~此值）
+
 	public static void Load(string modFolder)
 	{
 		if (string.IsNullOrEmpty(modFolder))
