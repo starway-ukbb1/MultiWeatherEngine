@@ -2,7 +2,7 @@
 
 Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成、演化、移动、合并与类型转变，真实风场 / 降雨 / 龙卷 / 下击暴流 / 沙尘暴，全程可交互。
 
-> 当前公开版本 **v2.2**。本 mod 由 AI 辅助设计制作。
+> 当前版本 **v2.2**。本 mod 由 AI 辅助设计制作。
 
 ---
 
@@ -36,12 +36,11 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
 
 ### 步骤
 
-1. 下载本仓库 `MultiWeatherEngine.dll`（Release 页附件）或自行构建（见「从源码构建」）
+1. 下载本仓库 `MultiWeatherEngine.dll`
 2. 放入 SFS 模组目录：
    ```
    <Steam>\steamapps\common\Spaceflight Simulator\Spaceflight Simulator Game\Mods\MultiWeatherEngine\
    ```
-   > 若同时装了 UITools，确保 `UITools.dll` 在 `Mods\UITools\` 下
 3. 启动游戏，进入一个世界（存档），按 **F6** 打开气象菜单
 
 ---
@@ -114,15 +113,7 @@ Spaceflight Simulator（SFS）天气模组：**7 类天气系统**自然生成�
 
 **已知简化**（SFS 2D 限制）：行星无纬度/三维环流概念，风切变/湿度场省略；所有形态按**横截面**表达。
 
-## 八、版本历史
-
-| 版本 | 说明 |
-|---|---|
-| **v2.2**（当前） | 终审全量修复：大气分级三阶段同步（巨行星大红斑 240 天）、消散期时间基准修复（高倍加速不再绕地球数圈）、冷尾流恢复校准、能量 HUD 阶段内重定标（成熟峰 100%）、等级上限按类型、龙卷强度钳制、生成动画链补齐、Description 精简 |
-| v2.1.0 | 上一公开版（渲染层审查修复） |
-| v2.0.x | 早期公开版 |
-
-## 九、已知问题
+## 七、已知问题
 
 - SFS 默认字体无中文字形时 HUD 用系统雅黑渲染（Win 自带）；若字体加载失败回退默认（方块），请反馈
 - 中文字体 emoji 不支持，界面使用纯文本/几何符号
