@@ -11,8 +11,8 @@ public class StormRenderer : MonoBehaviour
 {
 	// One complete set of storm visuals: three layers + their mesh buffers.
 	// Two of these exist in two different coordinate spaces:
-	//   near  -> Default layer, scale 1      (used when viewDistance < 50000)
-	//   far   -> Scaled Space layer, scaled  (activated when viewDistance >= 50000)
+	// near -> Default layer, scale 1 (used when viewDistance < 50000)
+	// far -> Scaled Space layer, scaled (activated when viewDistance >= 50000)
 	private class RenderSet
 	{
 		public GameObject backGO;
@@ -54,7 +54,7 @@ public class StormRenderer : MonoBehaviour
 		public float maxLife;
 		public float seed;
 		public int kind;
-		public Double2 wind;   // v2.0.99 — 风采样缓存（每 0.1s 采样一次，粒子数×帧率 CPU 大降）
+		public Double2 wind;   // 风采样缓存（每 0.1s 采样一次，粒子数×帧率 CPU 大降）
 		public float windT;
 	}
 
@@ -71,7 +71,7 @@ public class StormRenderer : MonoBehaviour
 	private const double VisualOuterRho = 4.6;
 	private const int SkyNX = 48;
 	private const int SkyNY = 34;
-	// v2.1.1 — 缓存 LayerMask 查找（原每帧 2 次字符串查表，白捡）
+	// 缓存 LayerMask 查找（原每帧 2 次字符串查表，白捡）
 	private static int cachedDefaultLayer = -1;
 	private static int cachedScaledLayer = -1;
 
@@ -90,7 +90,7 @@ public class StormRenderer : MonoBehaviour
 	private int cloudN;
 
 	private float flashTimer;
-	// v2.1.4 — 雨柱触地落点：风暴中心地形高度（相对海平面，8s 节流采样）。
+	// 雨柱触地落点：风暴中心地形高度（相对海平面，8s 节流采样）。
 	// GetTerrainHeightAtAngle 内部有数组分配，不可每帧调。
 	private double rainGroundH;
 	private int rainGroundFrame = -999;
@@ -101,38 +101,38 @@ public class StormRenderer : MonoBehaviour
 
 	private Double2 camG;
 	private Vector2 camLocal;
-	// v1.0.35 — far 粒子顶点相对基准 = 台风中心本地坐标(val)；与 GO(太阳系基准)同一参考系 → 稳定。
+	// far 粒子顶点相对基准 = 台风中心本地坐标(val)；与 GO(太阳系基准)同一参考系 → 稳定。
 	private Vector2 alignOrigin;
-	// v1.0.36 — 绝对顶点模式：GO scale=1、顶点全预缩放。farAbsS = farSizeScale×halfCam/depth 校准 1.5x。
+	// 绝对顶点模式：GO scale=1、顶点全预缩放。farAbsS = farSizeScale×halfCam/depth 校准 1.5x。
 	private bool farAbs;
 	private float farAbsS;
 	private float renderScale = 1f;
-	// v1.0.25 — 传送保护：记录上一帧相机/台风本地坐标，单帧大跳视为传送/世界重建。
+	// 传送保护：记录上一帧相机/台风本地坐标，单帧大跳视为传送/世界重建。
 	private Vector2 prevCamLocal;
 	private Vector2 prevStormLocal;
 	private bool hasPrevLoc;
-	// v2.3.8.4 — 粒子模拟用游戏世界时间差（与逻辑层风暴移动同步，时间加速不甩粒子）
+	// 粒子模拟用游戏世界时间差（与逻辑层风暴移动同步，时间加速不甩粒子）
 	private double lastSimWT;
 	private double simDt;
-	// v2.0.98 — 性能优化（用户：只实时渲染正在影响飞船的风暴，其他风暴粒子不补充不删除
+	// 性能优化（用户：只实时渲染正在影响飞船的风暴，其他风暴粒子不补充不删除
 	// 只移动、保留打雷）：puffLive=true 时粒子正常重生/衰减；false 时粒子不死不重生，
 	// 只按风场移动（远风暴省 SpawnPuff 开销）。
-	// v2.3.8.3 — v2.0.98 优化已退役（用户：就是这个导致云被吃——非活区粒子移动但
+	// 优化已退役（用户：就是这个导致云被吃——非活区粒子移动但
 	// 不重生 = 净流失）：粒子现在任何距离都走完整生命周期。
-	// v2.3.8.8 — puffLive/puffFreeze 冻结分级整体退役（用户：粒子冻结像卡住，去了）：
+	// puffLive/puffFreeze 冻结分级整体退役（用户：粒子冻结像卡住，去了）：
 	// 粒子任何距离全量更新，字段删除。
-	// v2.0.98 — 生成动画（用户：生成也来搞个动画）：系统生成/类型转变后 0→1（2 秒）
+	// 生成动画（用户：生成也来搞个动画）：系统生成/类型转变后 0→1（2 秒）
 	// 云粒子从透明渐入，配合粒子过渡。public — Manager 生成时置 0 触发。
 	public float spawnAnimT = 1f;
 
-	// v1.0.37 固化 — 置顶机制(材质 ZTest/queue/sorting，恒开；far 深度=近裁剪2%本就最前)。
+	// 固化 — 置顶机制(材质 ZTest/queue/sorting，恒开；far 深度=近裁剪2%本就最前)。
 	public const int ZTestAlways = 0;
 	public const int ZTestNormal = 4;
 	public const int TopQueueCloud = 3500;
 	public const int TopQueueSky = 3400;
 	public const int TopSortingBase = 3500;
 
-	// v1.0.37 固化 — far 台风参数。F3/F4 实时调大小，F5 切换粗细步进(±1/±0.01)。
+	// 固化 — far 台风参数。F3/F4 实时调大小，F5 切换粗细步进(±1/±0.01)。
 	public static float farSizeScale = 1.5f;     // 大小倍率(默认 1.5x，用户确认完美)
 	public static bool farSizeFine = false;     // F5：false=粗(±1) true=细(±0.01)
 	public static float farTilt = 0f;           // 绕视线轴倾斜(弧度, 正=左；默认 0 用户要求去掉左倾)
@@ -155,24 +155,24 @@ public class StormRenderer : MonoBehaviour
 	public static float[] windZoneGain = new float[11] { 1.2f, 1.2f, 1.2f, 1.2f, 1.2f, 1.0f, 1.2f, 1.2f, 1.2f, 1.2f, 1.2f };
 	public static string[] windZoneNames = new string[11] { "外围弱", "较弱", "中", "较强", "强·眼壁", "风眼弱", "强·眼壁", "较强", "中", "较弱", "外围弱" };
 
-	// v2.0.93 — 暖化压蓝（用户：背景还是蓝的，要其他色克下蓝色）：原 (0.11,0.12,0.17)/
+	// 暖化压蓝（用户：背景还是蓝的，要其他色克下蓝色）：原 (0.11,0.12,0.17)/
 	// (0.34,0.36,0.46) B 通道最高 → 风暴灰布/云底色偏蓝。提 R 压 B → 黄褐暖调
-	// （风暴云内/底部光线偏黄褐，与 v2.0.92 云中偏黄一致）。
+	// （风暴云内/底部光线偏黄褐，与 云中偏黄一致）。
 	private static readonly Color CanopyLow = new Color(0.16f, 0.14f, 0.12f);
 	private static readonly Color CanopyHigh = new Color(0.44f, 0.41f, 0.34f);
 	private static readonly Color CloudLow = new Color(0.3f, 0.32f, 0.38f);
 	private static readonly Color CloudHigh = new Color(0.98f, 0.98f, 1f);
-	// v2.2.0 — 巨行星/厚大气云色（用户：木星/土星/海王星特有风暴环境）：
+	// 巨行星/厚大气云色（用户：木星/土星/海王星特有风暴环境）：
 	// atmoClass==2 巨行星：云色向行星表面基准色偏移（大红斑橙红/大白斑亮白/大暗斑青蓝）；
 	// atmoClass==1 金星类：硫酸云偏黄。BuildBack 每帧刷新，puff 循环乘 rgb（alpha 不变）。
 	private Color cloudTint = Color.white;
-	// v2.3.8 优化#4 — 巨行星云色基准 8s 节流采样（GetTerrainColor 纹理采样每帧做是浪费，
+	// 优化#4 — 巨行星云色基准 8s 节流采样（GetTerrainColor 纹理采样每帧做是浪费，
 	// 行星表面色随风暴移动缓慢变化，8s 刷新一次视觉无差）。
 	private float cloudTintTimer;
-	// v2.3.8 优化#3 — 天空网格索引一次性（sky 网格 48×34 固定，索引 Rebuild 后设一次即可）。
+	// 优化#3 — 天空网格索引一次性（sky 网格 48×34 固定，索引 Rebuild 后设一次即可）。
 	private bool skyIdxReady;
 
-	// v2.4.0 R3 — 天空眼区开口（审查🔴-R3：天空穹顶 op→1 是"无眼洞实心灰布"，眼稀云画在
+	// R3 — 天空眼区开口（审查🔴-R3：天空穹顶 op→1 是"无眼洞实心灰布"，眼稀云画在
 	// 灰布上不可见——眼清晰度被架空）：台风眼区在天空网格上开椭圆洞（透出地面/蓝天），
 	// 随 eyeSharp 开合。RenderSkyLayer 每帧算好洞参数，WriteSkyCell 逐顶点 op 衰减。
 	private Vector2 skyHoleC;
@@ -183,15 +183,15 @@ public class StormRenderer : MonoBehaviour
 
 	private float skyHoleStrength;
 
-	// v2.3.8 诊断 — 粒子出界重生统计（用户：粒子从左到右被吃现象 v2.2.8 修复后仍在，
+	// 诊断 — 粒子出界重生统计（用户：粒子从左到右被吃现象 修复后仍在，
 	// 打日志定位是否有系统性漂移）：统计"被吹出 4.6Rmax"重生发生的侧别（+s=drift 下游/
-	// -s=drift 上游），若一侧显著多于另一侧即实锤系统性漂移。节流 2s 打一条。
+	// s=drift 上游），若一侧显著多于另一侧即实锤系统性漂移。节流 2s 打一条。
 	private static int dbgOutCount;
 	private static int dbgOutPos;
 	private static int dbgOutNeg;
 	private static float dbgOutLogT;
 
-	// v2.0 — 多天气引擎：每个渲染器绑定一个 WeatherSystem 实例（独立渲染）。
+	// 多天气引擎：每个渲染器绑定一个 WeatherSystem 实例（独立渲染）。
 	public WeatherSystem storm;
 	private WeatherSystem S => storm;
 
@@ -215,7 +215,7 @@ public class StormRenderer : MonoBehaviour
 		}
 		if (val == null)
 		{
-			// v2.4.6 — FindObjectOfType 已过时（CS0618）；FindAnyObjectByType 更快（不要求
+			// FindObjectOfType 已过时（CS0618）；FindAnyObjectByType 更快（不要求
 			// 最新实例，且不整场景遍历排序）。此 fallback 仅在 7 个内置 shader 全失败时触发。
 			SpriteRenderer val2 = UnityEngine.Object.FindAnyObjectByType<SpriteRenderer>();
 			if (val2 != null && val2.sharedMaterial != null)
@@ -254,7 +254,7 @@ public class StormRenderer : MonoBehaviour
 	{
 		RenderSet rs = new RenderSet();
 		rs.backOrder = 20;
-		// v2.0.47 — 雨层排最低：frontOrder 210（最高层，雨盖一切）→ 19（云 back=20 之下、
+		// 雨层排最低：frontOrder 210（最高层，雨盖一切）→ 19（云 back=20 之下、
 		// sky=18 之上）——雨被云/附属现象盖住（出生点藏云里），但在天空穹顶之上可见。
 		rs.frontOrder = 19;
 		rs.skyOrder = 18;
@@ -304,11 +304,11 @@ public class StormRenderer : MonoBehaviour
 		return val;
 	}
 
-	/// <summary>
-	/// Reproduces the red debug probe's "nothing can occlude me" recipe on the storm itself:
-	/// depth test off, transparent queue pushed past everything, sorting order lifted to 3500+.
-	/// Applied to both render sets so near/far behave identically.
-	// v1.0.37 固化 — 置顶机制恒开（far 深度=近裁剪2%本就最前；这里再压队列/排序兜底）。
+	// / <summary>
+	// / Reproduces the red debug probe's "nothing can occlude me" recipe on the storm itself:
+	// / depth test off, transparent queue pushed past everything, sorting order lifted to 3500+.
+	// / Applied to both render sets so near/far behave identically.
+	// 固化 — 置顶机制恒开（far 深度=近裁剪2%本就最前；这里再压队列/排序兜底）。
 	private void ApplyTopMost()
 	{
 		if (mat != null)
@@ -358,12 +358,12 @@ public class StormRenderer : MonoBehaviour
 	}
 
 
-	/// <summary>
-	/// Finds the enabled camera that actually renders <paramref name="layer"/>. If several do,
-	/// the one drawn last (highest depth) wins, because that is the image the player ends up
-	/// looking at. Returns null when no active camera includes the layer in its culling mask,
-	/// which by itself is a complete answer to "why can't I see it?".
-	/// </summary>
+	// / <summary>
+	// / Finds the enabled camera that actually renders <paramref name="layer"/>. If several do,
+	// / the one drawn last (highest depth) wins, because that is the image the player ends up
+	// / looking at. Returns null when no active camera includes the layer in its culling mask,
+	// / which by itself is a complete answer to "why can't I see it?".
+	// / </summary>
 	private static Camera CameraForLayer(int layer)
 	{
 		if (layer < 0)
@@ -384,11 +384,11 @@ public class StormRenderer : MonoBehaviour
 		return best;
 	}
 
-	/// <summary>
-	/// Half the vertical extent a camera can see, in that camera's own world units, plus a
-	/// depth that sits comfortably between its clip planes. This is the yardstick used to
-	/// convert real-world metres into whatever scale the drawing camera happens to work in.
-	/// </summary>
+	// / <summary>
+	// / Half the vertical extent a camera can see, in that camera's own world units, plus a
+	// / depth that sits comfortably between its clip planes. This is the yardstick used to
+	// / convert real-world metres into whatever scale the drawing camera happens to work in.
+	// / </summary>
 	private static float HalfExtent(Camera cam, out float depth)
 	{
 		float n = Mathf.Max(cam.nearClipPlane, 0.0001f);
@@ -454,7 +454,7 @@ public class StormRenderer : MonoBehaviour
 		TyphoonConfig i = TyphoonConfig.I;
 		canopyN = Mathf.Clamp(i.canopyPuffs, 0, 4000);
 		cloudN = Mathf.Clamp(i.cloudPuffs, 0, 4000);
-		// v2.0.87 — 雨密度 ×3（用户要求）：rainDrops(1700) ×3 钳 12000。
+		// 雨密度 ×3（用户要求）：rainDrops(1700) ×3 钳 12000。
 		int num = Mathf.Clamp(i.rainDrops * 3, 0, 12000);
 		puffs = new Puff[canopyN + cloudN];
 		for (int j = 0; j < canopyN; j++)
@@ -466,14 +466,14 @@ public class StormRenderer : MonoBehaviour
 			puffs[canopyN + k] = SpawnPuff(1);
 		}
 		drops = new Drop[num];
-		// v2.0.14/v2.0.18/v2.0.22/v2.0.24/v2.0.28/v2.0.37 — backQuads 预留附属现象空间：
+		// ///// — backQuads 预留附属现象空间：
 		// 漏斗双层(28) + 螺旋(16) + 碎片(20) + 下击暴流(64) + 卷尘环(8) + 余量。
-		// v2.0.85 — 多实例（数量限制解除）：预算 144 → 800（最多 4 龙卷×72 + 4 下暴×64 + 黑框）。
-		near.backQuads = canopyN + cloudN + 1200;   // v2.3.8 优化#5 — 附属现象预算 800→1200（龙卷类型 variant/墙云/滚轴/核塔 feature 前置）
+		// 多实例（数量限制解除）：预算 144 → 800（最多 4 龙卷×72 + 4 下暴×64 + 黑框）。
+		near.backQuads = canopyN + cloudN + 1200;   // 优化#5 — 附属现象预算 800→1200（龙卷类型 variant/墙云/滚轴/核塔 feature 前置）
 		near.frontQuads = num;
 		far.backQuads = canopyN + cloudN + 1200;
 		far.frontQuads = num;
-		skyIdxReady = false;   // v2.3.8 优化#3 — Rebuild 后天空索引需重设
+		skyIdxReady = false;   // 优化#3 — Rebuild 后天空索引需重设
 		Alloc(ref near.bV, ref near.bT, ref near.bC, ref near.bI, near.backQuads);
 		Alloc(ref near.fV, ref near.fT, ref near.fC, ref near.fI, near.frontQuads);
 		Alloc(ref far.bV, ref far.bT, ref far.bC, ref far.bI, far.backQuads);
@@ -553,10 +553,10 @@ public class StormRenderer : MonoBehaviour
 		}
 	}
 
-	// v2.4.4 — canopy 语义注释（渲染层讨论：kind==0 原名"云顶薄云"——审查指出其实际是
+	// canopy 语义注释（渲染层讨论：kind==0 原名"云顶薄云"——审查指出其实际是
 	// 风暴底部连片的阴云层 overcast deck（雷暴下方/风暴周围低垂云幕，对应 CanopyLow 颜色
 	// 与天空层 botBase 共用）。视觉语义二选一后定：**底部阴云层**（0.12 风速系数注释：非
-	// 物理——压低顶层平流，保云顶形态稳定，不把阴云层吹散）。colorBase 保持 v2.0.93 暖化
+	// 物理——压低顶层平流，保云顶形态稳定，不把阴云层吹散）。colorBase 保持 暖化
 	// 审美（用户确认过云色），CanopyLow 蓝灰为天空层底色（物理云底暗灰）。
 	private Puff SpawnPuff(int kind)
 	{
@@ -567,10 +567,10 @@ public class StormRenderer : MonoBehaviour
 		double num;
 		double num2;
 		double num3;
-		// v2.0.5 — 渲染形态按类型（不再全是台风眼壁环）：
-		//   台风：眼壁环+雨带（原样）
-		//   飑线：沿线(经度方向)拉长的云带
-		//   单体类(单体/多单体/超级单体/MCS)：中心云团（无风眼）
+		// 渲染形态按类型（不再全是台风眼壁环）：
+		// 台风：眼壁环+雨带（原样）
+		// 飑线：沿线(经度方向)拉长的云带
+		// 单体类(单体/多单体/超级单体/MCS)：中心云团（无风眼）
 		bool isLine = S.type == StormType.SquallLine;
 		bool isRotary = S.type == StormType.Typhoon;
 		if (kind == 0)
@@ -582,9 +582,9 @@ public class StormRenderer : MonoBehaviour
 			}
 			else if (isRotary)
 			{
-				// v2.0.97 — 台风大 puff 分布按等级（用户：台风眼依旧存在于每个等级——原
+				// 台风大 puff 分布按等级（用户：台风眼依旧存在于每个等级——原
 				// Random.Range(0.5f,4.6f) 中心 0~0.5R 无任何 puff，TD/TS 即使 BuildBack 的
-				// num6 中心满云也无粒子可画 → 假眼；v2.0.51 只修了 num6 公式漏了分布）。
+				// num6 中心满云也无粒子可画 → 假眼； 只修了 num6 公式漏了分布）。
 				float eyeR0 = (float)WeatherSystem.TyphoonEyeR(S.category);
 				if (eyeR0 <= 0f)
 				{
@@ -607,15 +607,15 @@ public class StormRenderer : MonoBehaviour
 			}
 			else
 			{
-				// v2.0.65 — 中心假眼修复（用户：所有非台风系统中间稀两边密）：原 num =
+				// 中心假眼修复（用户：所有非台风系统中间稀两边密）：原 num =
 				// Random^0.55×2.0——指数<1 把分布拉向大值（边缘），中心没有大云团，
-				// v2.0.63 尺寸×30% 放大后空洞更明显（"疑似台风眼"）。改 ^1.6 中心聚集：
+				// 尺寸×30% 放大后空洞更明显（"疑似台风眼"）。改 ^1.6 中心聚集：
 				// 中心大云团密实无眼，边缘仍有 puff 过渡（0.5-2.0Rmax 占 ~58%）。
 				num = Math.Pow(Random.value, 1.6) * 2.0;
 				num2 = Math.Pow(Random.value, 0.7) * 0.9 + 0.1;
 			}
 			num3 = ((Random.value < 0.5) ? (-1.0) : 1.0);
-			// v2.0.6 — puff 尺寸减小（×0.45/×0.4），云更碎更圆，减少"方块感"。
+			// puff 尺寸减小（×0.45/×0.4），云更碎更圆，减少"方块感"。
 			result.size = (float)(S.Rmax * Random.Range(0.2f, 0.6f));
 			result.baseAlpha = Random.Range(0.55f, 0.97f);
 			result.maxLife = Random.Range(45f, 140f);
@@ -626,7 +626,7 @@ public class StormRenderer : MonoBehaviour
 			{
 				// 飑线：沿线拉长（num=沿线距离，长 8R 的云带）
 				num = Random.Range(0.2f, 4.0f);
-				// v2.3.8.5 — 环流注入：主体云出生偏底部（中心上升气流入口），粒子被抬升
+				// 环流注入：主体云出生偏底部（中心上升气流入口），粒子被抬升
 				// 到顶部外散 → 出界回收再注入底部 = 自维持环流动画（用户：粒子从中间
 				// 向上往外跑时生的太慢——原 num2 全高度均匀随机，底部中心无持续注入，
 				// 上升通道稀疏）。指数 >1 偏 0（底部）。
@@ -634,7 +634,7 @@ public class StormRenderer : MonoBehaviour
 			}
 			else if (isRotary)
 			{
-				// v2.0.97 — 台风小 puff 分布按等级（同上修复）：TD/TS 中心云团；
+				// 台风小 puff 分布按等级（同上修复）：TD/TS 中心云团；
 				// cat≥2 眼壁内环密（eyeR~eyeR+1.2）+ 外环疏，眼内 15% 稀云 puff。
 				float eyeR1 = (float)WeatherSystem.TyphoonEyeR(S.category);
 				if (eyeR1 <= 0f)
@@ -652,7 +652,7 @@ public class StormRenderer : MonoBehaviour
 						num = (Random.value < 0.6) ? Random.Range(eyeR1 * 0.8f, eyeR1 + 1.2f) : Random.Range(eyeR1 + 1.2f, 4.2f);
 					}
 				}
-				// v2.3.8.5 — 环流注入：台风主体云出生偏底部眼壁（眼壁上升气流入口）——
+				// 环流注入：台风主体云出生偏底部眼壁（眼壁上升气流入口）——
 				// 眼壁环流持续供料（同飑线/单体，指数 >1 偏底部）。
 				num2 = Math.Pow(Random.value, 1.8) * 1.0 + 0.05;
 			}
@@ -660,17 +660,17 @@ public class StormRenderer : MonoBehaviour
 			{
 				// 单体类：中心云团（无风眼）
 				num = Random.Range(0.05f, 1.55f);
-				// v2.3.8.5 — 环流注入：对流型中心上升核心入口在底部中心（偏底部）。
+				// 环流注入：对流型中心上升核心入口在底部中心（偏底部）。
 				num2 = Math.Pow(Random.value, 1.9) * 1.0 + 0.08;
 			}
 			num3 = ((Random.value < 0.5) ? (-1.0) : 1.0);
 			result.size = (float)(S.Rmax * Random.Range(0.05f, 0.18f) * (0.6 + 0.7 * num2));
 			result.baseAlpha = Random.Range(0.3f, 0.85f);
-			// v2.4.3 — maxLife 分档（演化讨论：云型稳定隐形大头）：台风 60-180s（大尺度
+			// maxLife 分档（演化讨论：云型稳定隐形大头）：台风 60-180s（大尺度
 			// 云系维持久），其他 26-70s（中小系统流动快）。
 			result.maxLife = (S.type == StormType.Typhoon) ? Random.Range(60f, 180f) : Random.Range(26f, 70f);
 		}
-		// v2.0.15 — 云体悬浮：垂直因子 num2 映射到 [云底, 云顶]（不再从地面开始）。
+		// 云体悬浮：垂直因子 num2 映射到 [云底, 云顶]（不再从地面开始）。
 		result.pos = FromStorm(num3 * num * S.Rmax, S.Hbase + num2 * (S.Htop - S.Hbase));
 		result.life = result.maxLife * Random.value;
 		result.seed = Random.value;
@@ -716,12 +716,12 @@ public class StormRenderer : MonoBehaviour
 			return;
 		}
 		float dt = Mathf.Min(Time.deltaTime, 0.2f);
-		// v2.3.8.4 — 粒子跟不上时间加速修复（用户：似乎有粒子没跟上时间加速）：
+		// 粒子跟不上时间加速修复（用户：似乎有粒子没跟上时间加速）：
 		// 粒子位置/生命周期改用游戏世界时间差 simDt（与逻辑层风暴中心移动一致），
 		// 动画/闪电/节流仍用现实 dt（视觉节奏）。原粒子用 centerVel×dt_现实（≤0.2s/帧），
 		// 而风暴中心一帧移动 moveSpeed×dt_逻辑（时间加速下可 30 游戏秒/帧）→ 时间加速
 		// 时粒子每帧落后几百倍被风暴甩出云团 = 云被"吃"/拉变形。simDt 钳 30s/帧与逻辑层
-		// v2.0.99 一致 → 粒子与风暴中心严格同步。
+		// 一致 → 粒子与风暴中心严格同步。
 		double wtNow = WorldTime.main.worldTime;
 		simDt = wtNow - lastSimWT;
 		lastSimWT = wtNow;
@@ -734,7 +734,7 @@ public class StormRenderer : MonoBehaviour
 			simDt = 30.0;
 		}
 		UpdateLightning(dt);
-		// v2.0.98 — 生成/转变动画推进：生成时 spawnAnimT 从 0 渐入（云粒子淡出），
+		// 生成/转变动画推进：生成时 spawnAnimT 从 0 渐入（云粒子淡出），
 		// 类型转变时淡出淡入（TransitionBlend 控制 alpha 呼吸）。
 		if (spawnAnimT < 1f)
 		{
@@ -750,10 +750,10 @@ public class StormRenderer : MonoBehaviour
 		Vector3 position = main2.transform.position;
 		camG = WorldView.ToGlobalPosition(new Vector2(position.x, position.y));
 		camLocal = WorldView.ToLocalPosition(camG);
-		// v2.3.8.8 — 活区/冻结分级已整体退役（用户：粒子冻结像卡住，去了）：粒子任何
+		// 活区/冻结分级已整体退役（用户：粒子冻结像卡住，去了）：粒子任何
 		// 距离都全量更新，不再需要 puffLive/puffFreeze 判定。
 
-		// v1.0.25 — 传送保护：飞船传送/世界重建时相机或台风中心本地坐标会单帧大跳，
+		// 传送保护：飞船传送/世界重建时相机或台风中心本地坐标会单帧大跳，
 		// 此时参考系(planet holder)处于中间态，把台风画上去会飞到天空/太空。
 		// 检测到跳变(>200km/帧)就隐藏这一帧，等下一帧状态稳定再恢复正确锚定。
 		Vector2 stormLocalNow = Vector2.zero;
@@ -777,7 +777,7 @@ public class StormRenderer : MonoBehaviour
 			return;
 		}
 
-		// ---- Space selection at the 50000 threshold -----------------------------
+		// -- Space selection at the 50000 threshold -----------------------------
 		float vd = 0f;
 		try
 		{
@@ -791,7 +791,7 @@ public class StormRenderer : MonoBehaviour
 
 		float rs = farActive ? 0.0001f : 1f;
 
-		// v2.1.1 — NameToLayer 结果缓存（首次计算，此后零开销）
+		// NameToLayer 结果缓存（首次计算，此后零开销）
 		if (cachedDefaultLayer < 0)
 		{
 			cachedDefaultLayer = LayerMask.NameToLayer("Default");
@@ -828,7 +828,7 @@ public class StormRenderer : MonoBehaviour
 		Vector2 val = Vector2.zero;
 		if (s != null && s.planet != null)
 		{
-			val = WorldView.ToLocalPosition(s.MergedStormC());   // v2.0.51 — anchor 跟随合并动画中心
+			val = WorldView.ToLocalPosition(s.MergedStormC());   // anchor 跟随合并动画中心
 		}
 
 		// Who actually draws this layer? Geometry in a layer nobody renders stays invisible no
@@ -845,7 +845,7 @@ public class StormRenderer : MonoBehaviour
 		bool viewportPath = farActive && camL != null;
 		if (viewportPath)
 		{
-			// v1.0.37 固化 — far 行星锚定（太阳系基准，与 WorldEnvironment.holder 同构）+ 绝对顶点模式。
+			// 固化 — far 行星锚定（太阳系基准，与 WorldEnvironment.holder 同构）+ 绝对顶点模式。
 			// 台风缩放世界 = (台风太阳系 − 视点太阳系)/10000；Location.GetSolarSystemPosition 纯平移无旋转。
 			float worldHalf = ((vd > 1f) ? vd : mainHalf);
 			float depth;
@@ -857,7 +857,7 @@ public class StormRenderer : MonoBehaviour
 			try
 			{
 				double wt = WorldTime.main.worldTime;
-				Double2 stormSolar = s.planet.GetSolarSystemPosition(wt) + (Double2)s.MergedStormC();   // v2.0.51 — anchor 跟随合并动画中心
+				Double2 stormSolar = s.planet.GetSolarSystemPosition(wt) + (Double2)s.MergedStormC();   // anchor 跟随合并动画中心
 				Double2 viewSolar = WorldView.main.ViewLocation.GetSolarSystemPosition(wt);
 				Double2 diff = (stormSolar - viewSolar) / 10000.0;
 				planetXY = new Vector2((float)diff.x, (float)diff.y);
@@ -877,8 +877,8 @@ public class StormRenderer : MonoBehaviour
 		}
 		else
 		{
-			// Near-space (rs=1) path — working v1.0.16 behaviour.
-			// v2.2.9 — 修复"风暴随火箭飞天"（用户：逻辑层没问题，渲染层风暴能随火箭飞天）：
+			// Near-space (rs=1) path — working behaviour.
+			// 修复"风暴随火箭飞天"（用户：逻辑层没问题，渲染层风暴能随火箭飞天）：
 			// 原 near 模式 align=false（顶点 = ToLocalPosition 绝对本地坐标，相对 WorldView
 			// positionOffset）+ anchor=camLocal（GO 锚定相机）→ 最终 = camLocal + 顶点 =
 			// 双重偏移：相机（火箭）移动时 GO 跟着动、顶点不动，风暴整体随火箭飞天。
@@ -895,7 +895,7 @@ public class StormRenderer : MonoBehaviour
 		}
 
 		renderScale = goScale;
-		// v1.0.36 — 绝对顶点模式(farAbs)：GO scale=1、rotation=identity，台风尺寸全在顶点里。
+		// 绝对顶点模式(farAbs)：GO scale=1、rotation=identity，台风尺寸全在顶点里。
 		Vector3 goScaleV = (farAbs ? Vector3.one : new Vector3(goScale, goScale, goScale));
 		Quaternion goRot = (farAbs ? Quaternion.identity : anchorRot);
 		A.backGO.transform.localScale = goScaleV;
@@ -903,7 +903,7 @@ public class StormRenderer : MonoBehaviour
 		A.skyGO.transform.localScale = goScaleV;
 		A.backGO.transform.position = anchor;
 		A.frontGO.transform.position = anchor;
-		// v2.2.9 — sky 恒锚定相机（near）：天空穹顶是屏幕覆盖层，必须覆盖相机视野。
+		// sky 恒锚定相机（near）：天空穹顶是屏幕覆盖层，必须覆盖相机视野。
 		// far（viewportPath）维持锚定风暴中心（顶点已含全屏尺寸）；near 锚定 camLocal。
 		A.skyGO.transform.position = viewportPath ? anchor : (Vector3)camLocal;
 		A.backGO.transform.rotation = goRot;
@@ -915,7 +915,7 @@ public class StormRenderer : MonoBehaviour
 		BuildBack(dt, geoHalf, geoRs, align);
 		BuildRain(dt, geoCam, geoHalf, align);
 		RenderSkyLayer(geoCam, geoHalf, geoRs, align);
-		// v2.3.8.8 — 无条件 Push（v2.3.8 优化#1 冻结跳 Push 随 v2.1.1 真冻结一并退役：
+		// 无条件 Push（ 优化#1 冻结跳 Push 随 真冻结一并退役：
 		// 粒子任何距离都全量更新，顶点每帧都变，无冻结可跳）。
 		Push(A.backMesh, A.bV, A.bT, A.bC, A.bI, withIndices: false);
 		Push(A.frontMesh, A.fV, A.fT, A.fC, A.fI, withIndices: false);
@@ -945,22 +945,22 @@ public class StormRenderer : MonoBehaviour
 			float num3 = Mathf.Clamp((float)(s.Vmax / 78.0), 0.5f, 1f);
 			Color canopyLow = CanopyLow;
 			Color botBase = Color.Lerp(CanopyLow, CanopyHigh, num3 * 0.6f);
-			// v2.0.9 — 灰布最高浓度由强度决定：弱风暴中心最多 skyOpacity×0.5，
+			// 灰布最高浓度由强度决定：弱风暴中心最多 skyOpacity×0.5，
 			// 强风暴(Vmax≥45m/s)中心 op→1 完全盖死（分不清天空与陆地）。
 			float str = Mathf.Clamp01((float)(s.Vmax / 45.0));
 			float maxOp = Mathf.Lerp((float)TyphoonConfig.I.skyOpacity * 0.5f, 1f, str);
-			float op = maxOp * (float)num2 * (float)S.MergeFade() * S.DissolveFade() * spawnAnimT;   // v2.2（终审🟡-9）补乘 spawnAnimT：天空穹顶生成时随云淡入（原生成瞬间灰布全亮跳变）
+			float op = maxOp * (float)num2 * (float)S.MergeFade() * S.DissolveFade() * spawnAnimT;   // （终审🟡-9）补乘 spawnAnimT：天空穹顶生成时随云淡入（原生成瞬间灰布全亮跳变）
 			float num4 = (cam.aspect > 0.1f) ? cam.aspect : 1f;
 			float num5 = half / rs * num4 * 1.2f;
 			float num6 = half / rs * 1.2f;
 			if (farAbs)
 			{
-				// v1.0.36 — 绝对顶点模式：天空网格也预缩放(相对台风中心，GO scale=1)。
+				// 绝对顶点模式：天空网格也预缩放(相对台风中心，GO scale=1)。
 				num5 *= farAbsS / 10000f;
 				num6 *= farAbsS / 10000f;
 			}
 			Vector2 cc = (align ? Vector2.zero : camLocal);
-			// v2.4.0 R3 — 天空眼区开口（审查🔴-R3）：台风（有眼，cat≥2）且能量高时，在天空
+			// R3 — 天空眼区开口（审查🔴-R3）：台风（有眼，cat≥2）且能量高时，在天空
 			// 网格上开椭圆洞——洞中心 = 风暴中心云中层高投影（洞偏地平线下方则不开，避免
 			// 误开），rx=0.6×眼径（只开在眼内不碰眼壁）、ry=0.35×云层厚。随 eyeSharp 开合
 			// （能量降眼闭合）。SFS 近空间是相机对齐正交本地空间，stormLocal−alignOrigin
@@ -1017,7 +1017,7 @@ public class StormRenderer : MonoBehaviour
 					num9++;
 				}
 			}
-			// v2.3.8 优化#3 — 天空索引一次性：sky 网格 48×34 固定，原每帧 withIndices:true
+			// 优化#3 — 天空索引一次性：sky 网格 48×34 固定，原每帧 withIndices:true
 			// 触发 Clear+SetTriangles 重建相同索引（1632 顶点 × 每帧 = 浪费）。仅 Rebuild 后
 			// 首帧带索引，此后只更新顶点/uv/颜色（triangles 保留）。
 			Push(A.skyMesh, A.sV, A.sT, A.sC, A.sI, withIndices: !skyIdxReady);
@@ -1043,7 +1043,7 @@ public class StormRenderer : MonoBehaviour
 		A.sT[num + 1] = new Vector2(0f, 1f);
 		A.sT[num + 2] = Vector2.one;
 		A.sT[num + 3] = new Vector2(1f, 0f);
-		// v2.4.0 R3 — 眼区开口：4 个顶点各自按到洞中心距离衰减 op（洞内透出地面/蓝天）。
+		// R3 — 眼区开口：4 个顶点各自按到洞中心距离衰减 op（洞内透出地面/蓝天）。
 		float op0 = (skyHoleStrength > 0.001f) ? op * SkyHoleFade(x0, y0) : op;
 		float op1 = (skyHoleStrength > 0.001f) ? op * SkyHoleFade(x0, y1) : op;
 		float op2 = (skyHoleStrength > 0.001f) ? op * SkyHoleFade(x1, y1) : op;
@@ -1061,7 +1061,7 @@ public class StormRenderer : MonoBehaviour
 		A.sI[num2 + 5] = num + 3;
 	}
 
-	// v2.4.0 R3 — 天空眼区开口：网格顶点 (gx,gy) 到洞中心距离 → op 衰减因子
+	// R3 — 天空眼区开口：网格顶点 (gx,gy) 到洞中心距离 → op 衰减因子
 	// （1−strength×exp(−dx²−dy²)，洞内 op 最低 ×0.2，眼壁外不变）。高斯洞边缘柔和。
 	private float SkyHoleFade(float gx, float gy)
 	{
@@ -1092,15 +1092,15 @@ public class StormRenderer : MonoBehaviour
 
 	private void UpdateLightning(float dt)
 	{
-		// v2.2.1 — 沙尘暴无闪电（干燥系统）：直接禁用
+		// 沙尘暴无闪电（干燥系统）：直接禁用
 		if (!TyphoonConfig.I.lightning || S.type == StormType.DustStorm)
 		{
 			flashPower = 0f;
 			return;
 		}
-	// v2.1.2 — 闪电风暴增强因子：burst 实例强度累加。气象依据：中气旋/眼壁内闪电
+	// 闪电风暴增强因子：burst 实例强度累加。气象依据：中气旋/眼壁内闪电
 	// 密度远高于外围，burst 即"闪电密集区"——冷却缩短、闪点集中、亮度提升。
-	// v2.2.1 — 沙尘暴无闪电（干燥系统，沙尘摩擦起电不产生可见云地闪）。
+	// 沙尘暴无闪电（干燥系统，沙尘摩擦起电不产生可见云地闪）。
 	double lBoost = 0.0;
 	if (S != null && S.lightningBursts.Count > 0)
 		{
@@ -1115,17 +1115,17 @@ public class StormRenderer : MonoBehaviour
 		{
 			flashPower = Mathf.Max(0f, flashTimer / 0.22f);
 			flashPower *= ((Random.value < 0.35f) ? 0.45f : 1f);
-			flashPower *= (float)(1.0 + lBoost * 0.3);   // v2.1.2 — 亮度提升
+			flashPower *= (float)(1.0 + lBoost * 0.3);   // 亮度提升
 			return;
 		}
 		flashPower = 0f;
 		if (flashCooldown <= 0f)
 		{
 			double num = Mathf.Max(0.35f, (float)(S.Vmax / 78.0));
-			flashCooldown = Random.Range(1.4f, 6.5f) / (float)(num * (1.0 + lBoost * 2.0));   // v2.1.2 — 冷却缩短
+			flashCooldown = Random.Range(1.4f, 6.5f) / (float)(num * (1.0 + lBoost * 2.0));   // 冷却缩短
 			flashTimer = 0.22f;
 			double num2 = ((Random.value < 0.5) ? (-1.0) : 1.0);
-			if (lBoost > 0.05)   // v2.1.2 — 闪点向最近闪电风暴位置集中
+			if (lBoost > 0.05)   // 闪点向最近闪电风暴位置集中
 			{
 				double bs = S.lightningBursts[0].sOff * S.Rmax;
 				flashS = bs + num2 * S.Rmax * Random.Range(0.0f, 0.8f);
@@ -1141,17 +1141,17 @@ public class StormRenderer : MonoBehaviour
 	private void BuildBack(float dt, float camHalf, float rs, bool align)
 	{
 		WeatherSystem s = S;
-		// v2.2.0 — 巨行星/厚大气云色（用户：金星/木星/土星/海王星特有风暴环境）：
+		// 巨行星/厚大气云色（用户：金星/木星/土星/海王星特有风暴环境）：
 		// atmoClass==2 云色向行星表面基准色偏移（GetTerrainColor 采样纹理——贴图从北极
 		// 投影，UV 映射 SFS 内部处理），atmoClass==1 金星硫酸云偏黄；地球类保持白色。
-		// v2.2.1 — 沙尘暴固定沙色（干燥系统，不管行星大气分级——沙尘层本色）。
+		// 沙尘暴固定沙色（干燥系统，不管行星大气分级——沙尘层本色）。
 		if (s.type == StormType.DustStorm)
 		{
 			cloudTint = new Color(0.88f, 0.74f, 0.52f);   // 沙黄
 		}
 		else if (s.atmoClass == 2)
 		{
-			// v2.3.8 优化#4 — GetTerrainColor 纹理采样 8s 节流（巨行星云色基准随风暴
+			// 优化#4 — GetTerrainColor 纹理采样 8s 节流（巨行星云色基准随风暴
 			// 移动缓慢变化，每帧采样浪费；8s 刷新视觉无差）。
 			cloudTintTimer -= dt;
 			if (cloudTintTimer <= 0f)
@@ -1178,35 +1178,35 @@ public class StormRenderer : MonoBehaviour
 		}
 		float num = (float)TyphoonConfig.I.cloudOpacity;
 		int num2 = 0;
-		// v2.0.35 — 图层反转：云层（所属系统）要盖住附属现象（龙卷/下击暴流）。
+		// 图层反转：云层（所属系统）要盖住附属现象（龙卷/下击暴流）。
 		// WriteQuad 全 z=0，绘制顺序=覆盖顺序（后画的盖先画的），但缓冲按 index 顺序绘制。
 		// 让 puffs 云层写入缓冲后部（index = i + phenomenaQuads），附属现象从 0 开始 →
 		// 云层 index 大 = 更上层，龙卷漏斗顶端/下击暴流出生点被云体遮挡（藏进云里）。
 		int phenomenaQuads = A.backQuads - puffs.Length;
-		// v2.2.6 — 消散渐隐（用户：粒子消失可能是消散机制问题）：消散期（stage=2 寿命尾段）
+		// 消散渐隐（用户：粒子消失可能是消散机制问题）：消散期（stage=2 寿命尾段）
 		// 全链淡出——粒子/附属/雨 alpha 统一乘 DissolveFade（1→0），寿命到头移除时已
 		// 渐隐完毕，不再"啪"一下整团消失。
 		float dissolveFade = s.DissolveFade();
-		// v2.4.6 — 每帧常量缓存：原粒子循环与附属现象循环内每 quad 调 MergeFade()/
+		// 每帧常量缓存：原粒子循环与附属现象循环内每 quad 调 MergeFade()/
 		// TransitionBlend()（方法调用 + 分支），本帧内取值不变 → 缓存一次全帧复用。
 		float mergeFade = s.MergeFade();
 		double transBlend = s.TransitionBlend();
-		// v2.2.8 — 风暴中心速度（drift 切向）：粒子绝对速度 = 相对风（SampleWind false）+
+		// 风暴中心速度（drift 切向）：粒子绝对速度 = 相对风（SampleWind false）+
 		// 本速度（跟随风暴整体移动）——修复原 SampleWind 含不均匀 drift 分量（中心
 		// 0.675×drift < 风暴速度 1.0×drift）把粒子推挤到 4.6Rmax 重生消失的"从左到右消"。
 		Double2 centerVel = s.CenterVelocity();
-		// v2.3.8.8 — 去掉 v2.1.1 真冻结（用户：粒子那一刻就像卡了一样，所以去了——>15Rmax
+		// 去掉 真冻结（用户：粒子那一刻就像卡了一样，所以去了——>15Rmax
 		// 冻结时云团完全静止像卡住，视觉差；且粒子全量更新成本可接受）。粒子现在任何
 		// 距离都全量构建：移动 + 生命周期 + 重生（云永远在动，远处也流畅）。
 		for (int i = 0; i < puffs.Length; i++)
 		{
 			Puff puff = puffs[i];
-			// v2.0.99 — 粒子性能优化：①风采样缓存——每 0.1s 才 SampleWind 一次（2600 粒子
+			// 粒子性能优化：①风采样缓存——每 0.1s 才 SampleWind 一次（2600 粒子
 			// 每帧全量采样是最大开销，缓存后采样量降 1/10，云移动视觉无差）。
 			Double2 val;
 			if (puff.windT <= 0f)
 			{
-				// v2.2.8 — 相对风（不含 drift 平流）：粒子只受旋转/径向/湍流/附属影响，
+				// 相对风（不含 drift 平流）：粒子只受旋转/径向/湍流/附属影响，
 				// 对称稳定不再被推挤出风暴；整体跟随风暴由 centerVel 保证（canopy 的
 				// kind 缩放只作用于相对风，中心速度全量跟随——云顶薄云不再拖尾）。
 				val = s.SampleWind(puff.pos, false);
@@ -1217,29 +1217,29 @@ public class StormRenderer : MonoBehaviour
 			{
 				val = puff.wind;
 			}
-			puff.windT -= dt;   // v2.3.8.4 — 采样缓存保持现实节奏（时间加速下 0.1 游戏秒瞬间耗尽会每帧全量采样，v2.0.99 优化失效）
+			puff.windT -= dt;   // 采样缓存保持现实节奏（时间加速下 0.1 游戏秒瞬间耗尽会每帧全量采样， 优化失效）
 			ref Double2 pos = ref puff.pos;
-			pos += (val * ((puff.kind == 0) ? ((double)simDt * 0.12) : ((double)simDt)) + centerVel * simDt);   // v2.3.8.4 — 粒子位置用游戏时间 dt，与风暴中心同步（时间加速不甩粒子）
-			// v2.3.8.3 — 去掉 v2.0.98 性能优化（用户：就是这个导致云被吃——非活区粒子
+			pos += (val * ((puff.kind == 0) ? ((double)simDt * 0.12) : ((double)simDt)) + centerVel * simDt);   // 粒子位置用游戏时间 dt，与风暴中心同步（时间加速不甩粒子）
+			// 去掉 性能优化（用户：就是这个导致云被吃——非活区粒子
 			// 不死不重生）：life 无条件递减（正常生命周期），粒子在任何距离都走完整
 			// 生命周期+重生，云团永远稳定。开销可忽略（2600 粒子 26-140s 寿命 → 每秒
-			// 仅 ~30 次重生，v2.0.98 优化收益极小、副作用致命）。
-			// v2.3.8.4 — life 保持现实 dt（若按游戏时间，时间加速 100x 时全部粒子 ~1 现实秒
+			// 仅 ~30 次重生， 优化收益极小、副作用致命）。
+			// life 保持现实 dt（若按游戏时间，时间加速 100x 时全部粒子 ~1 现实秒
 			// 重生一轮 = 每秒数千次 SpawnPuff 卡顿；现实节奏下重生稳定，出界回收已兜底守恒）。
 			puff.life -= dt;
 			s.ToStormFrame(puff.pos, out var s2, out var h);
 			double num3 = Math.Abs(s2) / s.Rmax;
-		// v2.0.15 — 垂直归一化到 [云底, 云顶]（num4=0 云底、=1 云顶），云体悬浮在空中。
+		// 垂直归一化到 [云底, 云顶]（num4=0 云底、=1 云顶），云体悬浮在空中。
 		double vSpan = Math.Max(1.0, s.Htop - s.Hbase);
 		double num4 = (h - s.Hbase) / vSpan;
-		// v2.3.8.3 — 去掉 v2.0.98 性能优化：重生条件不再受 puffLive 限制，粒子在任何
-		// 距离都正常生命周期+出界回收（v2.3.8.2 已让出界无条件，本版连 life 也放行）。
-		// v2.1.1 真冻结（>15Rmax BuildBack return）保留——那是彻底跳过重算，与 v2.0.98
+		// 去掉 性能优化：重生条件不再受 puffLive 限制，粒子在任何
+		// 距离都正常生命周期+出界回收（ 已让出界无条件，本版连 life 也放行）。
+		// 真冻结（>15Rmax BuildBack return）保留——那是彻底跳过重算，与
 		// 的"只移动不重生"是两层不同机制。
 		if (puff.life <= 0f || num4 < 0.04 || num4 > 1.2 || num3 > 4.6)
 		{
-			Double2 rebornOld = puff.pos;   // v2.4.3 — 重生延续：旧位置备份（life 到点原地续命）
-			// v2.3.8 诊断 — 粒子被"吃"日志（用户：粒子从左到右被吃现象仍在，定位是否
+			Double2 rebornOld = puff.pos;   // 重生延续：旧位置备份（life 到点原地续命）
+			// 诊断 — 粒子被"吃"日志（用户：粒子从左到右被吃现象仍在，定位是否
 			// 系统性漂移）：仅统计"被吹出 4.6Rmax"重生（有空间方向性的才是漂移——life 到点/
 			// 垂直出界重生位置随机无方向）。s2 带符号：+s = drift 下游（屏幕一侧）、-s = 上游。
 			bool dbgOut = num3 > 4.6;
@@ -1258,7 +1258,7 @@ public class StormRenderer : MonoBehaviour
 				}
 			}
 			puff = SpawnPuff(puff.kind);
-			// v2.4.3 — 重生延续（演化讨论：重生位置改"旧位置+扰动"防闪烁，云型稳定隐形大头）：
+			// 重生延续（演化讨论：重生位置改"旧位置+扰动"防闪烁，云型稳定隐形大头）：
 			// 寿命到点原地续命（微切向扰动，云不整团跳变）；出界（num3/num4）才随机重生
 			// （出界粒子必须回界内，原地会死循环）。
 			if (puff.life <= 0f)
@@ -1269,33 +1269,33 @@ public class StormRenderer : MonoBehaviour
 			num3 = Math.Abs(s2) / s.Rmax;
 			num4 = (h - s.Hbase) / vSpan;
 		}
-			// v2.0.5 — 径向 alpha 按类型（不再全是台风眼壁环）：
-			//   台风：眼壁环（num5 偏置产生"眼"）
-			//   飑线：线状——阵风锋在 ro≈0.9 处最亮，向两侧衰减（沿经度拉长由 SpawnPuff 保证）
-			//   单体类：中心云团——ro 中心最浓、单调向外衰减（无风眼）
-			// v2.0.42 — 云缘柔和（用户：云体与蓝天边缘过渡突兀）：
-			//   台风眼壁 0.45→0.6（眼壁内外更柔和）；单体径向衰减 1.15→1.7（渐隐范围更大）；
-			//   非台风云缘统一加碎絮噪声（边缘过渡带按 seed 径向正弦扰动）→
-			//   云团边缘破碎蓬松，不再是一条规则圆弧硬边怼着蓝天。
+			// 径向 alpha 按类型（不再全是台风眼壁环）：
+			// 台风：眼壁环（num5 偏置产生"眼"）
+			// 飑线：线状——阵风锋在 ro≈0.9 处最亮，向两侧衰减（沿经度拉长由 SpawnPuff 保证）
+			// 单体类：中心云团——ro 中心最浓、单调向外衰减（无风眼）
+			// 云缘柔和（用户：云体与蓝天边缘过渡突兀）：
+			// 台风眼壁 0.45→0.6（眼壁内外更柔和）；单体径向衰减 1.15→1.7（渐隐范围更大）；
+			// 非台风云缘统一加碎絮噪声（边缘过渡带按 seed 径向正弦扰动）→
+			// 云团边缘破碎蓬松，不再是一条规则圆弧硬边怼着蓝天。
 			bool isRot = s.type == StormType.Typhoon;
 			bool isLine = s.type == StormType.SquallLine;
 			double num6;
 			if (isRot)
 			{
-				// v2.0.51 — 台风眼修复：cat≤1(TD/TS) 中心云团无眼；cat≥2 眼壁环。
-				// v2.0.67 — 眼壁按强度分级（TyphoonEyeR：STS 0.22 → 超强 0.40，贴近现实
+				// 台风眼修复：cat≤1(TD/TS) 中心云团无眼；cat≥2 眼壁环。
+				// 眼壁按强度分级（TyphoonEyeR：STS 0.22 → 超强 0.40，贴近现实
 				// 眼径 30-60km×30%=9-18km）+ 眼内稀云：眼内（ro<眼壁）一层稀薄云
 				// （真实台风眼内低云/薄云），台风越强眼内越稀（cat2 0.12 → cat6 0.03）。
-				// v2.3.5 — 眼清晰度由能量驱动（用户：能量制可以搞眼清晰程度，消散时眼自己
+				// 眼清晰度由能量驱动（用户：能量制可以搞眼清晰程度，消散时眼自己
 				// 就没了）：能量高 → 眼壁锐利 + 眼内稀云（清晰台风眼）；能量降 → 眼壁模糊
 				// 变宽 + 眼内被云填（眼壁崩塌）；消散期 → 眼结构消失变均匀云团，配合
 				// DissolveFade 整体渐隐——"眼先没了，风暴再散"的自然消散视觉（气象真实：
 				// 减弱台风眼壁置换/崩塌，眼会先消失）。
 				double eyeSharp = WeatherSystem.Clamp01((s.energy - 30.0) / 50.0);   // 30→0 眼没, 80→1 锐利
 				float num5 = (float)WeatherSystem.TyphoonEyeR(s.category);
-				// v2.4.3 — EWRC 眼径外扩（置换期眼壁向外扩展，复强后回缩——眼清晰度+眼径
+				// EWRC 眼径外扩（置换期眼壁向外扩展，复强后回缩——眼清晰度+眼径
 				// 双重表达"眼先糊后清"，复用能量→眼清晰度联动，玩家肉眼可见置换周期）。
-				// v2.2（专项 C 打磨）— 外扩段 0.4→0.85 改 0.4→1.0 高斯回缩（原 0.85 处
+				// （专项 C 打磨）— 外扩段 0.4→0.85 改 0.4→1.0 高斯回缩（原 0.85 处
 				// 硬切回缩跳变——外扩在 0.85 突然归零，改为 1.0 平滑回缩）。
 				if (s.ewrcT >= 0.0 && s.ewrcT >= 0.4)
 				{
@@ -1318,7 +1318,7 @@ public class StormRenderer : MonoBehaviour
 				}
 				else
 				{
-					// v2.4.3 — R2 台风眼重构（审查🔴-R2：原 Smooth01 单调上升最亮环≈0.85R
+					// R2 台风眼重构（审查🔴-R2：原 Smooth01 单调上升最亮环≈0.85R
 					// 落在风/雨峰 0.4R 外侧 0.45R——"亮云墙≠最强风雨"）：眼壁改高斯峰贴
 					// eyeR+0.15（σ=lerp(0.4,0.15,eyeSharp)：能量降 σ 变宽=眼壁崩塌，moat 随
 					// σ 平移）；峰后 moat 弱云带 0.2（真实台风眼壁外干空隙，不断环）→ 外圈
@@ -1330,7 +1330,7 @@ public class StormRenderer : MonoBehaviour
 					num6 = 0.2 + 0.8 * wall + outerBand * (1.0 - Smooth01((num3 - 3.2) / 1.4));
 					num6 *= 1.0 - Smooth01((num3 - 3.8) / 0.8);   // 尾部渐隐（4.6R 前归 0）
 				}
-				// v2.4.5 — 残余低压逗点化（消散产物讨论：台风消散=变性/残余低压，对称圆盘
+				// 残余低压逗点化（消散产物讨论：台风消散=变性/残余低压，对称圆盘
 				// → 松散逗点状云）：能量 30→10（commaK 0→1）——眼壁尾侧撕环（逗点方向
 				// commaDir×s2 负侧 wall 减弱）、加尾臂云带（逗点尾侧窄带）、整体松散
 				// （云量减少）。gate atmoClass==0 已在逻辑层（commaK=0 不触发）。
@@ -1344,7 +1344,7 @@ public class StormRenderer : MonoBehaviour
 			}
 			else if (isLine)
 			{
-				// v2.4.2 — 飑线弓形剖面（形态签名：审查"飑线最大的错是对称"——改沿 s 非对称：
+				// 飑线弓形剖面（形态签名：审查"飑线最大的错是对称"——改沿 s 非对称：
 				// 前缘低弧云墙（ro 0.7 峰）+ 中段高塔 + 尾部低平层状雨盾）。2D 横截面：
 				// 前缘云墙→高塔→尾部层状区沿移动方向展开。
 				double front = Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 0.7) / 0.55));
@@ -1353,9 +1353,9 @@ public class StormRenderer : MonoBehaviour
 			}
 			else
 			{
-				// v2.0.51 — 非台风差异化（用户：全都特别像）：径向云团宽度按类型——
+				// 非台风差异化（用户：全都特别像）：径向云团宽度按类型——
 				// 超级单体=紧凑浓核（0.9）、多单体=稍宽（1.45）、MCS=大而散（1.9）、单体=中等（1.7）。
-				// v2.4.2 — 形态签名：单体改窄高柱（1.7→1.2，孤立柱），超单紧凑浓核不变（墙云
+				// 形态签名：单体改窄高柱（1.7→1.2，孤立柱），超单紧凑浓核不变（墙云
 				// 在下方独立调制）。
 				double wCell;
 				if (s.type == StormType.Supercell)
@@ -1376,15 +1376,15 @@ public class StormRenderer : MonoBehaviour
 				}
 				num6 = 1.0 - Smooth01((num3 - 0.35) / wCell);
 			}
-			// v2.4.3 — R2 螺旋调制（审查🔴-R2：台风=眼+实心圆盘，无 moat 无螺旋）：粒子切向
+			// R2 螺旋调制（审查🔴-R2：台风=眼+实心圆盘，无 moat 无螺旋）：粒子切向
 			// 坐标 s2 相干斜条纹 = 螺旋雨带/云带投影（seed 每粒子常数只出点状花斑，s2 全局
 			// 坐标才出相干螺旋错觉）。独立 if（不挂 if-else 链，链已闭合）。
 			if (isRot)
 			{
-				// v2.4.5 — 逗点化时螺旋减弱（残余低压结构松散，螺旋雨带模糊消失）
+				// 逗点化时螺旋减弱（残余低压结构松散，螺旋雨带模糊消失）
 				num6 *= 0.6 + 0.4 * (1.0 - 0.6 * s.commaK) * Math.Sin((s2 / s.Rmax) * 4.2 - num3 * 1.2 + (double)puff.seed * 0.3);
 			}
-			// v2.4.2 — 形态签名（渲染层形态学讨论落地，全部落在 num6 的 (s,h) 函数零新架构）：
+			// 形态签名（渲染层形态学讨论落地，全部落在 num6 的 (s,h) 函数零新架构）：
 			if (s.type == StormType.Supercell)
 			{
 				// 超单墙云：云底下方悬挂的宽扁暗云（低 h、宽 s），绕轴慢漂（seed 相位）。
@@ -1410,7 +1410,7 @@ public class StormRenderer : MonoBehaviour
 			}
 			else if (num3 > 1.5)
 			{
-				// v2.2（终审🟡-12）— 台风云缘碎絮：眼壁与雨带之外（>1.5R）补碎絮调制
+				// （终审🟡-12）— 台风云缘碎絮：眼壁与雨带之外（>1.5R）补碎絮调制
 				// （避开眼壁高斯峰与 moat 段），打破同心圆弧硬边，云缘变破碎蓬松
 				// （现实台风外缘是破碎的螺旋云带外沿）。
 				double edgeBand2 = Math.Exp(0.0 - WeatherSystem.Pow2((num6 - 0.4) / 0.5));
@@ -1418,9 +1418,9 @@ public class StormRenderer : MonoBehaviour
 			}
 			double num7 = Math.Exp(0.0 - WeatherSystem.Pow2(Math.Max(0.0, num3 - (0.7 + 0.9 * num4)) / 3.4));
 			double num8 = Mathf.Clamp01(puff.life / 4f) * Mathf.Clamp01((puff.maxLife - puff.life) / 4f);
-			double num9 = (double)puff.baseAlpha * num6 * num7 * num8 * (double)num * (double)mergeFade   // v2.0.51 — 合并渐隐
-				* (double)spawnAnimT * (1.0 - 0.5 * transBlend) * (double)dissolveFade;   // v2.0.98 生成/转变过渡；v2.2.6 消散渐隐
-			// v2.4.5 — 云底侵蚀（消散产物#2，对流系统通用）：消散期（energy 20→0）云底先
+			double num9 = (double)puff.baseAlpha * num6 * num7 * num8 * (double)num * (double)mergeFade   // 合并渐隐
+				* (double)spawnAnimT * (1.0 - 0.5 * transBlend) * (double)dissolveFade;   // 生成/转变过渡； 消散渐隐
+			// 云底侵蚀（消散产物#2，对流系统通用）：消散期（energy 20→0）云底先
 			// 透明、顶部砧云后散——"从下往上散"的对流消散签名（超单/单体/MCS 的砧云残留
 			// 是现实消散最标志性的视觉）。erode=Clamp01((20-energy)/20)、
 			// hErode=1-erode×(1-Smooth01(num4/0.6))：0.6H 以下先蚀、以上砧云保留。
@@ -1446,7 +1446,7 @@ public class StormRenderer : MonoBehaviour
 				}
 				val2 = Color.Lerp(CloudLow, CloudHigh, (float)WeatherSystem.Clamp01(num4 * 1.25));
 			}
-			// v2.2.0 — 巨行星/厚大气云色（rgb 乘 tint，alpha 不变；白 tint 时中性无开销）
+			// 巨行星/厚大气云色（rgb 乘 tint，alpha 不变；白 tint 时中性无开销）
 			if (cloudTint.r < 0.999f || cloudTint.g < 0.999f || cloudTint.b < 0.999f)
 			{
 				val2 = new Color(val2.r * cloudTint.r, val2.g * cloudTint.g, val2.b * cloudTint.b, val2.a);
@@ -1461,15 +1461,15 @@ public class StormRenderer : MonoBehaviour
 				float num12 = flashPower * (float)Math.Exp((0.0 - num11) * num11);
 				if (num12 > 0.002f)
 				{
-					val2 = Color.Lerp(val2, new Color(0.82f, 0.9f, 1f), Mathf.Clamp01(num12 * 1.6f));   // v2.4.1 R15 — 闪电色偏蓝（冷白光，审查🟡-R15 原暖白 (1,0.97,0.85) 不像闪电）
+					val2 = Color.Lerp(val2, new Color(0.82f, 0.9f, 1f), Mathf.Clamp01(num12 * 1.6f));   // R15 — 闪电色偏蓝（冷白光，审查🟡-R15 原暖白 (1,0.97,0.85) 不像闪电）
 					num9 = Math.Min(1.0, num9 + (double)num12 * 0.5);
 				}
 			}
-			// v2.0.43 — 云缘白化：边缘逐渐透明 + 向白渐变（真实云缘受光泛白、化入背景）。
+			// 云缘白化：边缘逐渐透明 + 向白渐变（真实云缘受光泛白、化入背景）。
 			// num6 越小越靠边 → 颜色越白；alpha 由 num9 照常渐隐到 0 → 蓝→白→透明→蓝天，
 			// 过渡比纯透明更柔和（白色在蓝天前有弥散感，不突兀）。
 			double whiten = (1.0 - num6) * 0.6;
-			// v2.4.3 — R2 moat 白化禁用（审查🔴-R2：moat 弱云带 0.2 会触发 whiten≈0.48
+			// R2 moat 白化禁用（审查🔴-R2：moat 弱云带 0.2 会触发 whiten≈0.48
 			// 变低 alpha 白雾反亮，moat 变"亮空隙"）：台风下 whiten 只在 num6>0.15 生效，
 			// 眼内稀云/moat（0.2）不泛白，外圈（0.6+）正常。
 			if (isRot)
@@ -1483,7 +1483,7 @@ public class StormRenderer : MonoBehaviour
 			val2.a = (float)num9;
 			Vector2 val3 = WorldView.ToLocalPosition(puff.pos);
 			float num13 = puff.size * rs;
-			// v2.0.42 — 云缘柔和：云体粒子在云团边缘（num6 小）收缩尺寸 → 外圈渐隐蓬松，
+			// 云缘柔和：云体粒子在云团边缘（num6 小）收缩尺寸 → 外圈渐隐蓬松，
 			// 与蓝天过渡不再是一道硬边。canopy 云顶层（kind==0）保持连续覆盖不缩。
 			if (puff.kind == 1 && num6 < 0.9)
 			{
@@ -1500,11 +1500,11 @@ public class StormRenderer : MonoBehaviour
 				num13 = num15;
 			}
 			float num16 = num13 / rs;
-			// v2.0.35 — 图层反转：云层写入缓冲后部（index=i+phenomenaQuads，高层），
+			// 图层反转：云层写入缓冲后部（index=i+phenomenaQuads，高层），
 			// 附属现象（龙卷/下击暴流）从 index 0 开始（低层）→ 云层盖住附属现象。
 			if (i + phenomenaQuads < A.backQuads)
 			{
-				// v1.0.36 — 绝对顶点模式：顶点=相对台风中心预缩放(值小、float 精度好)，GO scale=1。
+				// 绝对顶点模式：顶点=相对台风中心预缩放(值小、float 精度好)，GO scale=1。
 				Vector2 centre = align ? (val3 - alignOrigin) : val3;
 				float quadHalf = num16;
 				if (farAbs)
@@ -1516,12 +1516,12 @@ public class StormRenderer : MonoBehaviour
 			}
 			puffs[i] = puff;
 		}
-		// v2.0.7/v2.0.18 — 附属龙卷（粒子 1/2：漏斗）：收缩圆盘列，从云底向下长。
-		// v2.0.18 — grow = min(形成相位, 强度)：形成时向下长、消散时向上缩（消散动画）；
+		// / — 附属龙卷（粒子 1/2：漏斗）：收缩圆盘列，从云底向下长。
+		// grow = min(形成相位, 强度)：形成时向下长、消散时向上缩（消散动画）；
 		// 顶端喇叭口接云底（wall cloud，解决"漏斗没接上云体"）；颜色提亮清晰。
-		// v2.0.25 — grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
+		// grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
 		// （"先出现在云底、长好后在地面"的观感错位，用户反馈"生成后突然变位置"）。
-		// v2.0.85 — 多实例遍历（数量限制解除 + 随机位置）：每龙卷独立锚点/强度/相位。
+		// 多实例遍历（数量限制解除 + 随机位置）：每龙卷独立锚点/强度/相位。
 		if (S != null && S.planet != null && num2 < A.backQuads)
 		{
 			for (int fi = 0; fi < S.tornadoes.Count; fi++)
@@ -1531,23 +1531,23 @@ public class StormRenderer : MonoBehaviour
 				{
 					continue;
 				}
-				// v2.0.50 — 锚定修复：行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构，
+				// 锚定修复：行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构，
 				// 不再相机本地坐标加偏移——那是"玩家动现象跟着动"的根因）。
-				Double2 stormC = FxAnchor(S, fx);   // v2.0.85 — 实例锚点（合并中心+切向偏移）
+				Double2 stormC = FxAnchor(S, fx);   // 实例锚点（合并中心+切向偏移）
 				Double2 radialP = stormC.normalized;
 				Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);
 				double grow = Math.Min(fx.phase, fx.strength);
-				// v2.0.35 — 龙卷生成点上提：顶端（t=1）从云底 Hbase 升到云内 Hbase+8% 云带，
+				// 龙卷生成点上提：顶端（t=1）从云底 Hbase 升到云内 Hbase+8% 云带，
 				// 配合图层反转（云层盖附属）→ 漏斗从云中"钻出"而非贴在云底下缘。
 				double torRise = (S.Htop - S.Hbase) * 0.08;
-				// v2.0.19 — 生长方向修正：漏斗顶端恒接云底（t=1 → Hbase+torRise），底端 = (Hbase+torRise)×(1−grow)
+				// 生长方向修正：漏斗顶端恒接云底（t=1 → Hbase+torRise），底端 = (Hbase+torRise)×(1−grow)
 				// 从云内向下长（grow 0→1 底端下降到地面）。原公式顶端随 grow 上移、底端恒在地面
 				// → 看起来"从地上长起来"（方向反了）。
-				// v2.0.39 — 漏斗本体改纯静态形态粒子（用户确认：要有不会动、只构筑形态的粒子）：
+				// 漏斗本体改纯静态形态粒子（用户确认：要有不会动、只构筑形态的粒子）：
 				// 去掉 spin 旋转 + sway 摆动，14 层圆盘位置固定（仅随 grow 上下做形成/消散动画），
 				// 稳定构筑漏斗骨架；旋转动感全部交给螺旋（贴壁转）/碎片（卷升）/卷尘环（翻卷）。
 				int layers = 14;
-				bool ropeOut = fx.dissolving;   // v2.4.4 — 提到循环外（子涡段也要用）
+				bool ropeOut = fx.dissolving;   // 提到循环外（子涡段也要用）
 				for (int li = 0; li < layers && num2 < A.backQuads; li++)
 				{
 					double t = (double)li / (double)(layers - 1);
@@ -1558,11 +1558,11 @@ public class StormRenderer : MonoBehaviour
 					{
 						rr += S.Rmax * (t - 0.8) * 0.9;
 					}
-				// v2.4.1 — 龙卷类型（variant 自动派生）：楔形=宽实墙、绳状/rope-out=细+透、
+				// 龙卷类型（variant 自动派生）：楔形=宽实墙、绳状/rope-out=细+透、
 				// 水龙卷=白水柱、陆龙卷=细尘柱。dissolving（消散）→ 绳状 rope-out（变细+
 				// 底部蛇形摆+底部先透，复用绳状参数块——整合复查确认 rope-out 与 dissolving
 				// 是同一件事，共用参数）。
-				// v2.4.4 — 多涡旋（5）主涡略细、卫星（6）正常、gustnado（7）=矮小尘旋
+				// 多涡旋（5）主涡略细、卫星（6）正常、gustnado（7）=矮小尘旋
 				// （高度只到 60%——阵风锋前沿的弱涡旋，无深对流）。
 				if (fx.variant == 1)
 				{
@@ -1586,11 +1586,11 @@ public class StormRenderer : MonoBehaviour
 				}
 				double tEff = t * ((fx.variant == 7) ? 0.6 : 1.0);   // gustnado 矮（阵风锋小涡旋）
 				hh = (S.Hbase + torRise) * (1.0 - grow * (1.0 - tEff));
-					Double2 planetPos = stormC + radialP * hh;   // v2.0.50 — 行星全局 → 一次转换
+					Double2 planetPos = stormC + radialP * hh;   // 行星全局 → 一次转换
 					Vector2 cen = WorldView.ToLocalPosition(planetPos);   // 静态：无 sway 摆动
 					Vector2 qc = align ? (cen - alignOrigin) : cen;
-					// v2.4.1 — rope-out 蛇形摆：消散时底部横向摆动（绳状扭曲感），越近地摆幅越大
-					// v2.2（终审🟡-8）— 加时间相位 S.age×2.0：原 sway 只依赖层索引 li 与种子，
+					// rope-out 蛇形摆：消散时底部横向摆动（绳状扭曲感），越近地摆幅越大
+					// （终审🟡-8）— 加时间相位 S.age×2.0：原 sway 只依赖层索引 li 与种子，
 					// 是固定 S 形（不扭动）；加时间项后蛇形翻卷动画真实。
 					if (ropeOut)
 					{
@@ -1605,9 +1605,9 @@ public class StormRenderer : MonoBehaviour
 						halfW = halfW * farAbsS / 10000f;
 						halfC = halfC * farAbsS / 10000f;
 					}
-					// v2.4.1 — 漏斗颜色按类型（龙卷滤镜讨论：壁预提亮防灰化发绿；水龙卷白水、
+					// 漏斗颜色按类型（龙卷滤镜讨论：壁预提亮防灰化发绿；水龙卷白水、
 					// 陆龙卷土色）；rope-out 底部先透（alpha × (0.4+0.6×t) 底部消失）。
-					Color wallCol = new Color(0.72f, 0.76f, 0.90f);   // v2.4.1 预提亮（漏斗色 (0.6,0.66,0.82) 亮度 0.62 灰屏近不可见）
+					Color wallCol = new Color(0.72f, 0.76f, 0.90f);   // 预提亮（漏斗色 (0.6,0.66,0.82) 亮度 0.62 灰屏近不可见）
 					Color coreCol = new Color(0.88f, 0.92f, 1f);
 					if (fx.variant == 3)
 					{
@@ -1620,12 +1620,12 @@ public class StormRenderer : MonoBehaviour
 						coreCol = new Color(0.75f, 0.70f, 0.60f);
 					}
 					float ropeFade = ropeOut ? (0.4f + 0.6f * (float)t) : 1f;
-					float aWall = 0.95f * (0.52f + 0.55f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.4.1 rope-out 底部先透
+					float aWall = 0.95f * (0.52f + 0.55f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // 合并渐隐； 消散渐隐； rope-out 底部先透
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, halfW, halfW, Vector2.right, new Color(wallCol.r, wallCol.g, wallCol.b, aWall), 0f);
-					float aCore = 0.32f * (0.5f + 0.5f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.2 生成动画
+					float aCore = 0.32f * (0.5f + 0.5f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // 合并渐隐； 消散渐隐； 生成动画
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, halfC, halfC, Vector2.right, new Color(coreCol.r, coreCol.g, coreCol.b, aCore), 0f);
 				}
-				// v2.4.4 — 多涡旋（5）/卫星龙卷（6）子涡：主漏斗外附加 2/1 个小漏斗绕转。
+				// 多涡旋（5）/卫星龙卷（6）子涡：主漏斗外附加 2/1 个小漏斗绕转。
 				// 多涡旋=主涡内 2 子涡快速绕转（真实：子涡沿眼壁内侧旋转）、卫星=外侧轨道
 				// 1 小漏斗慢绕。subAngle 用现实时间累计（视觉动效，时间加速下不糊成环）。
 				// quad 预算 1200 充裕（子涡 8 层×2 实例 ≈ 16 quads/龙卷）。
@@ -1654,18 +1654,18 @@ public class StormRenderer : MonoBehaviour
 								qc2 = (cen2 - alignOrigin) * (farAbsS / 10000f);
 								rr2 *= farAbsS / 10000f;
 							}
-							float aW2 = 0.6f * (0.4f + 0.6f * (float)t2) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * spawnAnimT;   // v2.2（fix-checker ⚠️-3）子涡补乘 spawnAnimT
+							float aW2 = 0.6f * (0.4f + 0.6f * (float)t2) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * spawnAnimT;   // （fix-checker ⚠️-3）子涡补乘 spawnAnimT
 							WriteQuad(A.bV, A.bT, A.bC, num2++, qc2, (float)rr2, (float)rr2, Vector2.right, new Color(0.66f, 0.70f, 0.84f, aW2), 0f);
 						}
 					}
 				}
 			}
 		}
-		// v2.0.37 — 地面卷尘环：漏斗底部触地点绕一圈尘土粒子（真实龙卷触地的标志性现象：
+		// 地面卷尘环：漏斗底部触地点绕一圈尘土粒子（真实龙卷触地的标志性现象：
 		// 地面尘土被吸起绕着底端旋转）。漏斗底部细尖只有 0.015Rmax（超单 9m）远看不可见，
 		// 卷尘环让"触地"在视觉上一目了然——底部始终贴地、尘粒绕底端翻卷。
 		// grow 太小整体隐藏（与漏斗/螺旋/碎片同一条件，形成/消散动画一致）。
-		// v2.0.85 — 多实例遍历。
+		// 多实例遍历。
 		if (S != null && S.planet != null && num2 < A.backQuads)
 		{
 			for (int fi = 0; fi < S.tornadoes.Count; fi++)
@@ -1675,8 +1675,8 @@ public class StormRenderer : MonoBehaviour
 				{
 					continue;
 				}
-				Double2 stormC = FxAnchor(S, fx);   // v2.0.85 — 实例锚点
-				Double2 radialP = stormC.normalized;                       // v2.0.50 — 行星全局径向
+				Double2 stormC = FxAnchor(S, fx);   // 实例锚点
+				Double2 radialP = stormC.normalized;                       // 行星全局径向
 				Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星全局切向
 				double grow = Math.Min(fx.phase, fx.strength);
 				double torRise = (S.Htop - S.Hbase) * 0.08;
@@ -1689,7 +1689,7 @@ public class StormRenderer : MonoBehaviour
 					// 尘环半径脉动（尘土被卷着翻，不是规整圆环）
 					double dustR = S.Rmax * (0.04 + 0.05 * (0.5 + 0.5 * Math.Sin(S.age * 2.5 + (double)d)));
 					double hhD = hhBase + S.Rmax * 0.025 * Math.Abs(Math.Sin(S.age * 3.5 + (double)d * 1.3));
-					Double2 planetPos = stormC + radialP * hhD + perpP * (dustR * Math.Cos(ang));   // v2.0.50
+					Double2 planetPos = stormC + radialP * hhD + perpP * (dustR * Math.Cos(ang));   //
 					Vector2 cen = WorldView.ToLocalPosition(planetPos);
 					Vector2 qc = align ? (cen - alignOrigin) : cen;
 					float half = (float)(S.Rmax * 0.026);
@@ -1698,19 +1698,19 @@ public class StormRenderer : MonoBehaviour
 						qc = (cen - alignOrigin) * (farAbsS / 10000f);
 						half = half * farAbsS / 10000f;
 					}
-					// v2.0.38 — 提亮：灰屏（近距风暴变灰后处理）下原土棕(0.6,0.55,0.48)会被拉成
+					// 提亮：灰屏（近距风暴变灰后处理）下原土棕(0.6,0.55,0.48)会被拉成
 					// 和背景一样的灰暗 → 卷尘环改用更亮更暖的亮尘色(0.82,0.74,0.62) + alpha 提升，
 					// 即使在轻微灰化下触地尘环依然醒目。
-					float a = 0.72f * (0.4f + 0.6f * (float)grow) * (0.55f + 0.45f * (float)Math.Abs(Math.Sin(S.age * 3.0 + (double)d))) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.72f * (0.4f + 0.6f * (float)grow) * (0.55f + 0.45f * (float)Math.Abs(Math.Sin(S.age * 3.0 + (double)d))) * mergeFade * dissolveFade * spawnAnimT;   // 合并渐隐； 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.82f, 0.74f, 0.62f, a), 0f);
 				}
 			}
 		}
-		// v2.0.18 — 附属龙卷（粒子 2/2：螺旋）：亮白小粒子绕漏斗轴螺旋旋转，
+		// 附属龙卷（粒子 2/2：螺旋）：亮白小粒子绕漏斗轴螺旋旋转，
 		// 在漏斗半径范围内流动 + 整体来回摆动（螺旋动感）。
-		// v2.0.25 — grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
+		// grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
 		// （"先出现在云底、长好后在地面"的观感错位，用户反馈"生成后突然变位置"）。
-		// v2.0.85 — 多实例遍历。
+		// 多实例遍历。
 		if (S != null && S.planet != null && num2 < A.backQuads)
 		{
 			for (int fi = 0; fi < S.tornadoes.Count; fi++)
@@ -1720,22 +1720,22 @@ public class StormRenderer : MonoBehaviour
 				{
 					continue;
 				}
-				Double2 stormC = FxAnchor(S, fx);   // v2.0.85 — 实例锚点
-				Double2 radialP = stormC.normalized;                       // v2.0.50 — 行星全局径向
+				Double2 stormC = FxAnchor(S, fx);   // 实例锚点
+				Double2 radialP = stormC.normalized;                       // 行星全局径向
 				Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星全局切向
 				double grow = Math.Min(fx.phase, fx.strength);
-				// v2.0.35 — 螺旋生成点随漏斗顶端上提（云内 8% 云带），与漏斗同一基准。
+				// 螺旋生成点随漏斗顶端上提（云内 8% 云带），与漏斗同一基准。
 				double torRise = (S.Htop - S.Hbase) * 0.08;
-				// v2.0.19 — 螺旋粒子同样从云内向下长（uu=1 云底、uu=0 底端）。
+				// 螺旋粒子同样从云内向下长（uu=1 云底、uu=0 底端）。
 				int spirN = 16;
 				for (int si = 0; si < spirN && num2 < A.backQuads; si++)
 				{
 					double uu = (double)((si + S.age * 3.0) % (double)spirN) / (double)spirN;
 					double hh = (S.Hbase + torRise) * (1.0 - grow * (1.0 - uu));
-					double helixR = S.Rmax * (0.04 + 0.065 * uu);   // v2.0.24 — 螺旋贴边（沿漏斗壁旋转，边界显形）
+					double helixR = S.Rmax * (0.04 + 0.065 * uu);   // 螺旋贴边（沿漏斗壁旋转，边界显形）
 					double ang2 = S.age * 7.0 + uu * 34.0 + (double)si;
 					double sway2 = 0.06 * Math.Sin(S.age * 2.2 + (double)si * 1.7);  // 来回摆动
-					Double2 planetPos = stormC + radialP * hh + perpP * (helixR * Math.Cos(ang2) + sway2 * S.Rmax);   // v2.0.50
+					Double2 planetPos = stormC + radialP * hh + perpP * (helixR * Math.Cos(ang2) + sway2 * S.Rmax);   //
 					Vector2 cen = WorldView.ToLocalPosition(planetPos);
 					Vector2 qc = align ? (cen - alignOrigin) : cen;
 					float half = (float)(S.Rmax * 0.012);
@@ -1744,16 +1744,16 @@ public class StormRenderer : MonoBehaviour
 						qc = (cen - alignOrigin) * (farAbsS / 10000f);
 						half = half * farAbsS / 10000f;
 					}
-					float a = 0.85f * (0.5f + 0.5f * (float)grow) * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.85f * (0.5f + 0.5f * (float)grow) * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // 合并渐隐； 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.88f, 0.93f, 1f, a), 0f);
 				}
 			}
 		}
-		// v2.0.22 — 附属龙卷（粒子 3/3：碎片 debris）：地面被卷起的碎屑，绕漏斗轴螺旋
+		// 附属龙卷（粒子 3/3：碎片 debris）：地面被卷起的碎屑，绕漏斗轴螺旋
 		// 上升（模拟 EF5 级"车大小碎片空中飞"），土棕色调。
-		// v2.0.25 — grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
+		// grow 太小整体隐藏：避免 phase=0 时全部圆盘塌缩在云底叠成大圆盘
 		// （"先出现在云底、长好后在地面"的观感错位，用户反馈"生成后突然变位置"）。
-		// v2.0.85 — 多实例遍历。
+		// 多实例遍历。
 		if (S != null && S.planet != null && num2 < A.backQuads)
 		{
 			for (int fi = 0; fi < S.tornadoes.Count; fi++)
@@ -1763,11 +1763,11 @@ public class StormRenderer : MonoBehaviour
 				{
 					continue;
 				}
-				Double2 stormC = FxAnchor(S, fx);   // v2.0.85 — 实例锚点
-				Double2 radialP = stormC.normalized;                       // v2.0.50 — 行星全局径向
+				Double2 stormC = FxAnchor(S, fx);   // 实例锚点
+				Double2 radialP = stormC.normalized;                       // 行星全局径向
 				Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星全局切向
 				double grow = Math.Min(fx.phase, fx.strength);
-				// v2.0.35 — 碎片生成点随漏斗顶端上提（云内 8% 云带），与漏斗同一基准。
+				// 碎片生成点随漏斗顶端上提（云内 8% 云带），与漏斗同一基准。
 				double torRise = (S.Htop - S.Hbase) * 0.08;
 				int debN = 20;
 				for (int di2 = 0; di2 < debN && num2 < A.backQuads; di2++)
@@ -1777,7 +1777,7 @@ public class StormRenderer : MonoBehaviour
 					double dR = S.Rmax * (0.02 + 0.09 * uu);
 					double ang3 = S.age * 9.0 + uu * 26.0 + (double)di2 * 2.2;
 					double sway3 = 0.05 * Math.Sin(S.age * 3.0 + (double)di2) * S.Rmax;
-					Double2 planetPos = stormC + radialP * hh + perpP * (dR * Math.Cos(ang3) + sway3);   // v2.0.50
+					Double2 planetPos = stormC + radialP * hh + perpP * (dR * Math.Cos(ang3) + sway3);   //
 					Vector2 cen = WorldView.ToLocalPosition(planetPos);
 					Vector2 qc = align ? (cen - alignOrigin) : cen;
 					float half = (float)(S.Rmax * 0.01);
@@ -1786,14 +1786,14 @@ public class StormRenderer : MonoBehaviour
 						qc = (cen - alignOrigin) * (farAbsS / 10000f);
 						half = half * farAbsS / 10000f;
 					}
-					float a = 0.85f * (float)grow * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.85f * (float)grow * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // 合并渐隐； 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.66f, 0.52f, 0.36f, a), 0f);
 				}
 			}
 		}
-		// v2.0.7/v2.0.14 — 附属下击暴流：亮灰粒子从云中垂直向下冲出，近地面向四周扩散。
-		// v2.0.14 形成动画：alpha × phaseDownburst 逐渐增强。
-		// v2.0.85 — 下暴多实例遍历（数量限制解除 + 随机位置）。
+		// / — 附属下击暴流：亮灰粒子从云中垂直向下冲出，近地面向四周扩散。
+		// 形成动画：alpha × phaseDownburst 逐渐增强。
+		// 下暴多实例遍历（数量限制解除 + 随机位置）。
 		if (S != null && S.planet != null && num2 < A.backQuads)
 		{
 			for (int fdi = 0; fdi < S.downbursts.Count; fdi++)
@@ -1803,13 +1803,13 @@ public class StormRenderer : MonoBehaviour
 				{
 					continue;
 				}
-				Double2 stormC = FxAnchor(S, fx);   // v2.0.85 — 实例锚点
+				Double2 stormC = FxAnchor(S, fx);   // 实例锚点
 				Double2 radialP = stormC.normalized;                       // 行星径向（风暴中心方向）
 				Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星切向
 				double fall = (S.age * 0.9) % 1.0;
 				double ph2 = fx.phase;
-			// v2.0.28/v2.0.29/v2.0.30/v2.0.32/v2.0.33 — 下击暴流=连续气流 + 生命周期克隆 + 多排并排：
-			// v2.0.33：8 波次 × 8 粒子，排线收窄到 1.0Rmax（粒子间距最小，密集一排）；
+			// //// — 下击暴流=连续气流 + 生命周期克隆 + 多排并排：
+			// ：8 波次 × 8 粒子，排线收窄到 1.0Rmax（粒子间距最小，密集一排）；
 			// 这套"多波次并排下落+触地掀开+渐隐"渲染器可复用于降雨（用户洞察）。
 			int dropsN = 64;
 			int waves = 8;
@@ -1818,13 +1818,13 @@ public class StormRenderer : MonoBehaviour
 			{
 				int wi = di / perWave;            // 波次
 				int pi = di % perWave;            // 波内序号
-				// v2.0.32 — 波次错相位（连续流）；波内粒子同相位 = 并排。
+				// 波次错相位（连续流）；波内粒子同相位 = 并排。
 				double tt = ((double)wi / (double)waves + fall) % 1.0;
-				// v2.0.29 — 出生点藏在云内（12% 云带），下落出云。
-				// v2.0.35 — 发射器继续上提（12%→20% 云带），粒子在云体内更深的位置生成再冲出。
-				// v2.0.27 — 扩散纯水平（下击暴流出流=直线风，不抬升不卷尘）。
+				// 出生点藏在云内（12% 云带），下落出云。
+				// 发射器继续上提（12%→20% 云带），粒子在云体内更深的位置生成再冲出。
+				// 扩散纯水平（下击暴流出流=直线风，不抬升不卷尘）。
 				double hh = (S.Hbase + (S.Htop - S.Hbase) * 0.2) * (1.0 - tt);
-				// v2.0.51 — 触地立即横移 + y 完全归零：扩散起点从 tt=0.88 推迟到 0.96（窗口 0.04），
+				// 触地立即横移 + y 完全归零：扩散起点从 tt=0.88 推迟到 0.96（窗口 0.04），
 				// 且 spread>0 后 hh 强制归 0——粒子垂直砸到底的那一瞬间 y 方向完全归零、
 				// 立即沿排线向左右冲（不再有"贴着地面缓慢滑行"的阶段）。
 				double spread = Smooth(WeatherSystem.Clamp01((tt - 0.96) / 0.04));
@@ -1832,34 +1832,34 @@ public class StormRenderer : MonoBehaviour
 				{
 					hh = 0.0;   // 触地：y 移动完全归零
 				}
-				// v2.0.33/2.0.34 — 排线宽度（间距）由 Shift+F3/F4 实时调（downburstGap）。
+				// /2.0.34 — 排线宽度（间距）由 Shift+F3/F4 实时调（downburstGap）。
 				double lineW = S.Rmax * downburstGap;
 				double offsetX = ((double)pi / (double)(perWave - 1) - 0.5) * lineW;
-				// v2.0.31/v2.0.36 — 触地后全部向左右冲：沿排线（perp）向两端滑开
+				// / — 触地后全部向左右冲：沿排线（perp）向两端滑开
 				// （offsetX 延伸，左半排往左、右半排往右；2.5→4 拐弯后加速冲开）。
 				double offsetFinal = offsetX * (1.0 + spread * 4.0);
-				// v2.0.27 — 地面遮挡判定：视线先穿过行星球面则被挡（不画）。
-				Double2 centerP = stormC + radialP * hh;   // v2.0.85 — 实例锚点基准
+				// 地面遮挡判定：视线先穿过行星球面则被挡（不画）。
+				Double2 centerP = stormC + radialP * hh;   // 实例锚点基准
 				Double2 pPlanet = centerP + perpP * offsetFinal + radialP * 0.0;
 				if (BlockedByPlanet(camG, pPlanet, S.planet.Radius))
 				{
 					continue;
 				}
-				// v2.0.29 — 生命周期 alpha：出生淡入（藏云里）→ 下落全亮 →
+				// 生命周期 alpha：出生淡入（藏云里）→ 下落全亮 →
 				// 触地扩散后渐隐到 0（碰地面往旁边冲，逐渐变透明，把自己删了）。
 				float born = Mathf.Clamp01((float)(tt / 0.12));
 				float fade = 1f - (float)spread;
-				float a = 0.9f * (float)fx.strength * (float)ph2 * born * (0.25f + 0.75f * fade) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+				float a = 0.9f * (float)fx.strength * (float)ph2 * born * (0.25f + 0.75f * fade) * mergeFade * dissolveFade * spawnAnimT;   // 合并渐隐； 消散渐隐
 				if (a < 0.02f)
 				{
 					continue;   // 已淡出 = 已删除
 				}
-				// v2.0.31 — 高度方向 = radialDir（行星径向，从地表向天空）。
-				// v2.0.50 — 锚定修复：行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构）
+				// 高度方向 = radialDir（行星径向，从地表向天空）。
+				// 锚定修复：行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构）
 				Double2 planetPos = stormC + radialP * hh + perpP * offsetFinal;
 				Vector2 cen = WorldView.ToLocalPosition(planetPos);
 				Vector2 qc = align ? (cen - alignOrigin) : cen;
-				float half = (float)(S.Rmax * 0.045);   // v2.0.17 — 粒子极大缩小（原 0.09 仍太大）
+				float half = (float)(S.Rmax * 0.045);   // 粒子极大缩小（原 0.09 仍太大）
 				if (farAbs)
 				{
 					qc = (cen - alignOrigin) * (farAbsS / 10000f);
@@ -1869,14 +1869,14 @@ public class StormRenderer : MonoBehaviour
 			}
 			}
 		}
-		// v2.1.2 — 阵风锋：弧状云墙（沿切向 ±0.9Rmax 的 7 段柱形云墙，地面至 0.5Rmax 高）
+		// 阵风锋：弧状云墙（沿切向 ±0.9Rmax 的 7 段柱形云墙，地面至 0.5Rmax 高）
 		// + 地面尘浪（柱底薄白带）。气象模型：冷池出流推进前沿，云墙后部为强出流区。
-		// v2.2.0 — 沙尘暴（Haboob，用户：研究沙尘暴）：同一冷池出流经过沙漠/干地卷沙成墙
-		// ——风暴中心地形 Desert 时阵风锋自动升级为沙尘暴：云墙沙黄×1.2Rmax 高、尘浪
+		// 沙尘暴（Haboob，用户：研究沙尘暴）：同一冷池出流经过沙漠/干地卷沙成墙
+		// 风暴中心地形 Desert 时阵风锋自动升级为沙尘暴：云墙沙黄×1.2Rmax 高、尘浪
 		// 深沙色×0.06Rmax 浓沙墙（气象上 Haboob 就是阵风锋的沙漠版，零新架构）。
 		if (S.gustFronts.Count > 0)
 		{
-			bool haboob = S.terrainKind == TerrainKind.Desert || S.type == StormType.DustStorm;   // v2.2（终审🟡-11）加宿主：沙尘暴恒沙墙（出海也保持 Haboob 身份），地形仅作增强因子
+			bool haboob = S.terrainKind == TerrainKind.Desert || S.type == StormType.DustStorm;   // （终审🟡-11）加宿主：沙尘暴恒沙墙（出海也保持 Haboob 身份），地形仅作增强因子
 			double wallH = haboob ? 1.2 : 0.5;      // 沙墙更高（1.2Rmax vs 0.5Rmax）
 			double wallHalfY = haboob ? 0.6 : 0.25; // 云墙半高
 			double dustH = haboob ? 0.06 : 0.025;   // 尘浪更浓
@@ -1911,7 +1911,7 @@ public class StormRenderer : MonoBehaviour
 					Vector2 axis = (tL - bL).normalized;
 					float halfY = (float)(S.Rmax * wallHalfY * grow);
 					float halfX = (float)(S.Rmax * 0.11);
-					float wa = 0.75f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.1f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
+					float wa = 0.75f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.1f) * dissolveFade * spawnAnimT;   // 消散渐隐； 生成动画
 					if (farAbs)
 					{
 						qc = (cenL - alignOrigin) * (farAbsS / 10000f);
@@ -1926,7 +1926,7 @@ public class StormRenderer : MonoBehaviour
 					Vector2 qc2 = align ? (bL - alignOrigin) : bL;
 					float hx2 = (float)(S.Rmax * 0.22);
 					float hy2 = (float)(S.Rmax * dustH);
-					float da = 0.5f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.12f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
+					float da = 0.5f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.12f) * dissolveFade * spawnAnimT;   // 消散渐隐； 生成动画
 					if (farAbs)
 					{
 						qc2 = (bL - alignOrigin) * (farAbsS / 10000f);
@@ -1940,16 +1940,16 @@ public class StormRenderer : MonoBehaviour
 				}
 			}
 		}
-		// v2.2 — 11 区分段黑框 / 风圈线调试绘制（Shift+F2）已移除（用户：清理调试按键）。
+		// 11 区分段黑框 / 风圈线调试绘制（Shift+F2）已移除（用户：清理调试按键）。
 		// 风圈信息仍由 HUD 文字显示（风圈 7级≈xx km 等）。
-		// v2.0.35 — 图层反转后 puffs 写入 index i+phenomenaQuads（后部），附属现象占 index 0..phenomenaQuads-1，
+		// 图层反转后 puffs 写入 index i+phenomenaQuads（后部），附属现象占 index 0..phenomenaQuads-1，
 		// 全部 backQuads 都被填满（puffs.Length+phenomenaQuads == backQuads）→ 隐藏起点=backQuads（无未用顶点）。
 		HideRest(A.bV, A.bC, puffs.Length + phenomenaQuads, A.backQuads);
 	}
 
-	// v2.2 — 调试黑框绘制（DrawZoneRect/DrawEdge/DrawZoneTick）已移除（用户：清理调试按键）。
+	// 调试黑框绘制（DrawZoneRect/DrawEdge/DrawZoneTick）已移除（用户：清理调试按键）。
 
-	// v2.0.85 — 附属现象实例锚点（行星全局）：合并动画中心 + 切向偏移（sOff×Rmax，沿经度方向）。
+	// 附属现象实例锚点（行星全局）：合并动画中心 + 切向偏移（sOff×Rmax，沿经度方向）。
 	// 多实例龙卷/下暴各自独立位置（随机合适位置生成，数量限制解除）。
 	private static Double2 FxAnchor(WeatherSystem s, WeatherSystem.FxInst fx)
 	{
@@ -1959,7 +1959,7 @@ public class StormRenderer : MonoBehaviour
 		return c + pd * (fx.sOff * s.Rmax);
 	}
 
-	// v2.0.27 — 行星球面遮挡判定：视线从 camPos 到 p，若先与行星表面（半径 R）相交 → 被挡。
+	// 行星球面遮挡判定：视线从 camPos 到 p，若先与行星表面（半径 R）相交 → 被挡。
 	private static bool BlockedByPlanet(Double2 camPos, Double2 p, double R)
 	{
 		Double2 V = p - camPos;
@@ -1994,20 +1994,20 @@ public class StormRenderer : MonoBehaviour
 			HideRest(A.fV, A.fC, 0, A.frontQuads);
 			return;
 		}
-		// v2.2.1 — 沙尘暴无降雨（干燥系统，只有沙尘）——整层雨隐藏
+		// 沙尘暴无降雨（干燥系统，只有沙尘）——整层雨隐藏
 		if (S.type == StormType.DustStorm)
 		{
 			HideRest(A.fV, A.fC, 0, A.frontQuads);
 			return;
 		}
-		// v2.1.1 — 雨幕隔帧更新：细丝透明连续流，30fps 更新视觉无差，CPU 减半。
+		// 雨幕隔帧更新：细丝透明连续流，30fps 更新视觉无差，CPU 减半。
 		// 跳过帧不写顶点（保留上帧值），由 LateUpdate 末尾统一 Push。
 		if ((Time.frameCount & 1) == 1)
 		{
 			return;
 		}
-		// v2.0.90 — 性能（用户明确：视距 1500 内才渲染雨、单体/多单体 2500；且只渲染
-		// 离玩家最近系统的雨）——v2.0.88 放宽的 3000/4000 回归 1500/2500（"过早消失"
+		// 性能（用户明确：视距 1500 内才渲染雨、单体/多单体 2500；且只渲染
+		// 离玩家最近系统的雨）—— 放宽的 3000/4000 回归 1500/2500（"过早消失"
 		// 那轮已定位是落地淡出问题并修复，与视距裁剪无关）。
 		try
 		{
@@ -2024,14 +2024,14 @@ public class StormRenderer : MonoBehaviour
 		}
 		Double2 val = camG;
 		s.ToStormFrame(val, out var s2, out var h);
-		// v2.1.1 — 远风暴雨整层跳过：玩家距风暴 >15Rmax 时雨幕亚像素不可见，连每滴计算都省
+		// 远风暴雨整层跳过：玩家距风暴 >15Rmax 时雨幕亚像素不可见，连每滴计算都省
 		// （与云层 puffFreeze 冻结同步）。
 		if (Math.Abs(s2) > s.Rmax * 15.0)
 		{
 			HideRest(A.fV, A.fC, 0, A.frontQuads);
 			return;
 		}
-		// v2.0.90 — 只渲染离玩家最近系统的雨（多系统并存时性能优化）：存在比本系统更近的
+		// 只渲染离玩家最近系统的雨（多系统并存时性能优化）：存在比本系统更近的
 		// 系统 → 本系统雨整层隐藏（远系统雨条被近系统遮挡/亚像素，纯浪费）。
 		try
 		{
@@ -2059,15 +2059,15 @@ public class StormRenderer : MonoBehaviour
 		{
 		}
 		double num = Math.Abs(s2) / s.Rmax;
-		// v2.0.41 — 技术债修复：雨幕轮廓原为台风眼壁雨带（0.55Rmax 处才下雨）全局复用 →
+		// 技术债修复：雨幕轮廓原为台风眼壁雨带（0.55Rmax 处才下雨）全局复用 →
 		// 单体/超单中心反而没雨。按类型分流：台风=眼壁雨带环；对流型=中心降水最猛、
 		// 单调向外衰减（对流单体的降雨集中在核心上升区）。
-		// v2.0.87 — 台风恢复下雨（用户：台风一滴雨都没有是问题）：v2.0.85 曾按"台风完全
+		// 台风恢复下雨（用户：台风一滴雨都没有是问题）： 曾按"台风完全
 		// 不下雨"关闭 num2=0，实测台风没雨不对 → 恢复台风雨带（0.15 起始、1.6 峰值）。
 		double num2;
 		if (S.type == StormType.Typhoon)
 		{
-			// v2.3.7 — 审查🟡-10：台风雨带主峰移到眼壁（真实台风最大降雨在眼壁内侧，
+			// 审查🟡-10：台风雨带主峰移到眼壁（真实台风最大降雨在眼壁内侧，
 			// 眼壁对流最旺盛；原峰在 1.6Rmax 比眼壁远 4-7 倍，视觉"眼壁无水外围暴雨"）。
 			// 外圈 1.6Rmax 保留为螺旋雨带次峰。
 			double eyePeak = (double)WeatherSystem.TyphoonEyeR(S.category);
@@ -2075,21 +2075,21 @@ public class StormRenderer : MonoBehaviour
 			{
 				eyePeak = 0.3;   // TD/TS 无眼 → 0.3 近似
 			}
-			// v2.3.8 R1 — 次峰改真高斯（审查🔴-R1：原 max(0,num−1.6)/2.2 在 num<1.6 恒 0.5
+			// R1 — 次峰改真高斯（审查🔴-R1：原 max(0,num−1.6)/2.2 在 num<1.6 恒 0.5
 		// 是常数平台不是峰）：外圈螺旋雨带真正形成"第二峰"——中心 1.7R、σ0.9，峰值 0.5
 		// （低于眼壁主峰 0.9，气象正确：眼壁降雨最猛、外圈螺旋带次之），配合 lineW 加宽
-		// 铺到 3.5R。2D 横截面：斜向雨丝带从眼壁斜向外下延伸（s2 相干调制在 v2.3.9）。
+		// 铺到 3.5R。2D 横截面：斜向雨丝带从眼壁斜向外下延伸（s2 相干调制在 ）。
 		num2 = Smooth01((num - 0.15) / 0.3) * (Math.Exp(0.0 - WeatherSystem.Pow2((num - eyePeak) / 0.25)) * 0.9 + Math.Exp(0.0 - WeatherSystem.Pow2((num - 1.7) / 0.9)) * 0.5);
 		}
 		else
 		{
 			num2 = Smooth01((1.5 - num) / 1.2) * Math.Exp(0.0 - WeatherSystem.Pow2(num / 1.9));
 		}
-		// v2.1.3 — 雨"空中不可见"修复（用户：在空中就不可见）：旧因子以玩家高度 > 云底
+		// 雨"空中不可见"修复（用户：在空中就不可见）：旧因子以玩家高度 > 云底
 		// 1.2 倍（Hbase×2.0 处归零）就整层隐藏雨——对流系统云底 SFS 只有 150-300m，
 		// 玩家飞几百米雨就没了，而雨柱实际从云底垂到地面，进云/高空往下依然可见。
 		// 改为云顶之上才淡出：h < Htop 全可见，Htop→Htop×1.5 线性淡出（太高雨柱细节亚像素）。
-		num2 *= 1.0 - WeatherSystem.Clamp01((h - s.Htop) / (s.Htop * 0.5));   // v2.1.3 原 Hbase×1.2
+		num2 *= 1.0 - WeatherSystem.Clamp01((h - s.Htop) / (s.Htop * 0.5));   // 原 Hbase×1.2
 		num2 *= 0.55 + 0.45 * Math.Sin(num * 2.6 - s.age * 0.22);
 		if (h < -200.0)
 		{
@@ -2097,7 +2097,7 @@ public class StormRenderer : MonoBehaviour
 		}
 		num2 = WeatherSystem.Clamp01(num2);
 		float num3 = (float)TyphoonConfig.I.rainScale;
-		// v2.0.9 — far 下不再因 camHalf(=geoHalf=worldHalf) > Rmax×4 整体隐藏雨
+		// far 下不再因 camHalf(=geoHalf=worldHalf) > Rmax×4 整体隐藏雨
 		// （far 视距该值恒成立，导致雨在缩小视野时突然消失），改由下方 farAbs 分支的
 		// "够小消失"判定（雨条 < 屏 0.5% 才消失）。
 		if (num2 < 0.02 || (!farAbs && (double)camHalf > s.Rmax * 4.0))
@@ -2109,11 +2109,11 @@ public class StormRenderer : MonoBehaviour
 		Double2 val3 = new Double2(0.0 - normalized.y, normalized.x);
 		Double2 val4 = s.SampleWind(val);
 		Vector2 val5 = new Vector2((float)Double2.Dot(val4, val3), (float)Double2.Dot(val4, normalized));
-		float num7 = camHalf * 0.16f * num3;   // v2.2（终审🟢-6）— 删除死变量 num4/num5/num6（定义后从未被读取）
+		float num7 = camHalf * 0.16f * num3;   // （终审🟢-6）— 删除死变量 num4/num5/num6（定义后从未被读取）
 		float halfW = Mathf.Min(Mathf.Max(camHalf * 0.007f * num3, 0.06f), camHalf * 0.4f);
 		if (farAbs)
 		{
-			// v2.0.9 — far 修复：雨基准从 camHalf(=geoHalf=worldHalf, 雨幕/雨条被放大几十倍
+			// far 修复：雨基准从 camHalf(=geoHalf=worldHalf, 雨幕/雨条被放大几十倍
 			// 溢出屏幕)改为 Rmax 相关 → 雨随风暴同步缩小、聚集在风暴区域；
 			// 雨条换算成屏幕尺寸后 < 屏半高 0.5% 则整体消失（够小消失，避免亚像素闪烁）。
 			float depth2;
@@ -2130,22 +2130,22 @@ public class StormRenderer : MonoBehaviour
 			num7 *= farAbsS / 10000f;
 			halfW *= farAbsS / 10000f;
 		}
-		float num8 = (float)TyphoonConfig.I.rainOpacity * (float)num2 * (float)s.MergeFade() * spawnAnimT * s.DissolveFade();   // v2.0.99 生成动画雨随云渐入；v2.2.6 消散渐隐
-		// v2.0.47 — 雨改细长条 + 随机密集（用户：不要并排、要密集、发射器放云里、图层最低）：
+		float num8 = (float)TyphoonConfig.I.rainOpacity * (float)num2 * (float)s.MergeFade() * spawnAnimT * s.DissolveFade();   // 生成动画雨随云渐入； 消散渐隐
+		// 雨改细长条 + 随机密集（用户：不要并排、要密集、发射器放云里、图层最低）：
 		// 粒子独立随机横向分布（确定性伪随机，不排成排）、错相位连续下落（任意时刻各高度
 		// 都有雨 = 密集雨幕）、发射器在云内（Hbase+15% 云带，雨从云里冒出来被云盖住）；
 		// 细长条（halfW 极窄 × halfL 长，长轴=下落方向 radialDir）。
-		// v2.0.50 — 锚定修复（用户：玩家动现象跟着动）：原 cen = stormLocal(ToLocalPosition 后)
+		// 锚定修复（用户：玩家动现象跟着动）：原 cen = stormLocal(ToLocalPosition 后)
 		// + radialDir×hh + perp×offsetX（相机本地坐标再加偏移，相机旋转/移动时偏移方向错位）。
 		// 改与云层 puff 同构：行星全局偏移 → 一次 ToLocalPosition（stormC + radialP×hh + perpP×offsetX）。
-		// v2.0.50 — 边缘稀疏：横向分布改幂分布（u^1.5 向中心聚集）→ 越边缘的雨越不密集。
+		// 边缘稀疏：横向分布改幂分布（u^1.5 向中心聚集）→ 越边缘的雨越不密集。
 		Double2 stormC = FromStorm(0.0, 0.0);
 		Double2 radialP = stormC.normalized;                       // 行星全局径向（高度方向）
 		Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星全局切向（水平）
 		Vector2 radialDir = new Vector2((float)radialP.x, (float)radialP.y);   // 相机本地近似垂直（axis 长轴）
 		Vector2 perp = new Vector2((float)perpP.x, (float)perpP.y);
 		double fall = (s.age * 1.6) % 1.0;
-		// v2.1.4 — 雨柱触地修复（用户：雨在落到地面前就消失）：原落点 hh=0 = 海平面
+		// 雨柱触地修复（用户：雨在落到地面前就消失）：原落点 hh=0 = 海平面
 		// （FromStorm 基准 = planet.Radius），地形高于海平面（山地/高原）时雨滴到海平面
 		// 就开始淡出、实际地面还在上方 → 雨柱悬空/提前消失。改用风暴中心地形高度做落点
 		// 基准（8s 节流采样，GetTerrainHeightAtAngle 内部有数组分配不可每帧调）。
@@ -2163,17 +2163,17 @@ public class StormRenderer : MonoBehaviour
 			rainGroundH = Math.Max(0.0, gh);   // 海上钳到海平面
 		}
 		int dropsN = drops.Length;
-		float rainW = Mathf.Max((float)(s.Rmax * 0.004) * num3 * rainWidScale, 0.03f);   // 极细（雨宽，v2.0.48 可调）
-		float rainL = Mathf.Max((float)(s.Rmax * 0.09) * num3 * rainLenScale, 0.3f);     // 长条（雨长，v2.0.48 可调）
-		// v2.3.8 R1 — 雨幕横向范围加宽（审查🔴-R1：原恒 1.6R，外圈螺旋雨带次峰 1.6-1.8R
+		float rainW = Mathf.Max((float)(s.Rmax * 0.004) * num3 * rainWidScale, 0.03f);   // 极细（雨宽， 可调）
+		float rainL = Mathf.Max((float)(s.Rmax * 0.09) * num3 * rainLenScale, 0.3f);     // 长条（雨长， 可调）
+		// R1 — 雨幕横向范围加宽（审查🔴-R1：原恒 1.6R，外圈螺旋雨带次峰 1.6-1.8R
 		// 无粒子可达 = 峰是空的）：台风 3.5R（螺旋雨带完整铺开）、对流 2.5R（中心降水，
 		// 不需要外圈）。雨滴中心偏置 u^1.5 分布 + sin 摆动 → 最远 0.64×lineW，加宽后眼壁
 		// 带瞬时密度只降 ~13%（中心仍密），配下方边缘渐隐防硬切。
 		double lineW = s.Rmax * ((S.type == StormType.Typhoon) ? 3.5 : 2.5);
-		// v2.0.87 — 雨随风倾斜（用户：按风速倾斜，8 级开始维持极度倾斜 85° 不再继续）：
+		// 雨随风倾斜（用户：按风速倾斜，8 级开始维持极度倾斜 85° 不再继续）：
 		// 水平风速 vH（val5.x=切向风分量）→ 倾斜角 = min(85°, 5°/m/s×vH)（8级 17.2 m/s → 86 → 锁 85°）；
 		// 长轴 = 垂直方向旋转 tiltRad 朝顺风方向（雨被吹斜成斜雨丝/横雨）。
-		// v2.4.1 — R4 雨倾角改物理映射（审查🟡-R4：原 5°/m/s 线性 17m/s 就 85°，物理
+		// R4 雨倾角改物理映射（审查🟡-R4：原 5°/m/s 线性 17m/s 就 85°，物理
 		// = atan(vH/vt)≈atan(vH/9.5)——雨滴末速度 ~9.5m/s，8 级风 17.2m/s → 61°，85°
 		// 需 ~103m/s）：atan 映射封 80°。
 		double vH = Math.Abs(val5.x);
@@ -2185,26 +2185,26 @@ public class StormRenderer : MonoBehaviour
 		Color val8 = default(Color);
 		for (int i = 0; i < dropsN; i++)
 		{
-			// v2.0.87 — 更随机：相位加 hash 扰动（雨幕不规整铺开，错落自然）
+			// 更随机：相位加 hash 扰动（雨幕不规整铺开，错落自然）
 			double phRand = ((double)((i * 2246822519u + 777u) % 1000) / 1000.0) * 0.15;
-			// v2.0.89 — 雨"落地消失"修复（用户：雨过早消失指的是落地消失，程序落地高度与
+			// 雨"落地消失"修复（用户：雨过早消失指的是落地消失，程序落地高度与
 			// 实际不一样，放宽到负数）：tt 范围 [0,1) → [0,1.3)——1.0=落地，1.0~1.3 穿地
 			// 阶段（雨砸进地面以下一点才完全消失）；fade 起点推迟到 tt=1.0（真正触地才淡出）。
-			// v2.1.4 — 落点改实际地形高度：hh = ground + (emit−ground)×(1−tt)，tt=1 触到
+			// 落点改实际地形高度：hh = ground + (emit−ground)×(1−tt)，tt=1 触到
 			// 风暴中心真实地面（不再固定海平面 0）；山顶高于发射器时落点钳到发射器（雨柱截断）。
 			double tt = ((double)i / (double)dropsN + fall + phRand) % 1.3;   // 错相位连续流（密集雨幕）
 			// 发射器在云内：起点 = Hbase + 15% 云带（雨从云里冒出来）；tt=1 触地、tt>1 穿地负数
 			double emitH = s.Hbase + (s.Htop - s.Hbase) * 0.15;
 			double groundH = Math.Min(rainGroundH, emitH);   // 落点不高于发射器
 			double hh = groundH + (emitH - groundH) * (1.0 - tt);
-			// v2.0.50 — 边缘稀疏：u^1.5 幂分布（u 均匀 0-1，u^1.5 偏向 0）→ 中心密、边缘稀
+			// 边缘稀疏：u^1.5 幂分布（u 均匀 0-1，u^1.5 偏向 0）→ 中心密、边缘稀
 			double u = ((double)((i * 2654435761u) % 10000) / 10000.0);
-			// v2.0.87 — 更随机：横向加时间摆动（雨幕横向漂移，不呆板）
+			// 更随机：横向加时间摆动（雨幕横向漂移，不呆板）
 			double offsetX = (Math.Pow(u, 1.5) * 2.0 - 1.0) * lineW * 0.5 + Math.Sin((double)i * 7.31 + s.age * 3.0) * lineW * 0.14;
 			// 生命周期：出生淡入（云里冒头）→ 下落全亮 → 落地（tt=1）后淡出删除（负数穿地）
 			float born = Mathf.Clamp01((float)(tt / 0.1));
 			float fade = 1f - (float)Smooth(WeatherSystem.Clamp01((tt - 1.0) / 0.3));
-			// v2.3.8 R1 — 雨幕边缘渐隐（lineW 加宽后防硬切）：距中心 >0.6×lineW 的雨滴在
+			// R1 — 雨幕边缘渐隐（lineW 加宽后防硬切）：距中心 >0.6×lineW 的雨滴在
 			// 0.8R 过渡带内淡出（0.6×lineW → 0.6×lineW+0.8R 完全消失）。用每雨滴横向偏移
 			// offsetX 而非相机距离（相机靠近风暴中心时边缘渐隐依然正确）。
 			float edgeFade = (float)Smooth01((0.6 * lineW - Math.Abs(offsetX)) / Math.Max(0.8 * s.Rmax, 1.0));
@@ -2213,7 +2213,7 @@ public class StormRenderer : MonoBehaviour
 			{
 				continue;
 			}
-			// v2.0.50 — 行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构，锚定在地表不随玩家飘）
+			// 行星全局偏移 → 一次 ToLocalPosition（与云层 puff 同构，锚定在地表不随玩家飘）
 			Double2 planetPos = stormC + radialP * hh + perpP * offsetX;
 			Vector2 cen = WorldView.ToLocalPosition(planetPos);
 			Vector2 qc = align ? (cen - alignOrigin) : cen;
@@ -2225,16 +2225,16 @@ public class StormRenderer : MonoBehaviour
 				hw = hw * farAbsS / 10000f;
 				hl = hl * farAbsS / 10000f;
 			}
-			// v2.0.49 — 雨滴提亮（灰屏修复）：近距风暴灰化（ProximityFX 饱和度 0.55/亮度 0.82）
+			// 雨滴提亮（灰屏修复）：近距风暴灰化（ProximityFX 饱和度 0.55/亮度 0.82）
 			// 把雨丝原蓝白(0.8,0.86,0.95)压成灰扑扑 → 改近白(0.95,0.98,1) + alpha 抬满，
 			// 灰暗背景下雨丝保持最亮的高光感（和卷尘环/漏斗提亮同一策略）。
-			// v2.4.1 — R16 提亮绑近距×强度（审查🟡-R16：Vmax-only 不够——灰化是"近距×强度"，
+			// R16 提亮绑近距×强度（审查🟡-R16：Vmax-only 不够——灰化是"近距×强度"，
 			// 远看强风暴不灰屏、雨不该提亮；复用本方法相机近距因子 num=|s2|/Rmax，零跨类耦合，
 			// 与天空灰布同涨同消）。
 			float proxR = (float)Smooth01((4.6 - num) / 1.6);
 			float boostR = 1f + 0.5f * Mathf.Clamp01((float)(s.Vmax / 45.0)) * proxR;
 			val8 = Color.Lerp(new Color(0.8f, 0.86f, 0.95f, Mathf.Min(1f, a)), new Color(0.95f, 0.98f, 1f, Mathf.Min(1f, a * 1.15f)), Mathf.Clamp01(boostR - 1f));
-			// v2.4.5 — 泥雨（消散产物#3）：本系统附近有消散沙尘暴（muddyFactor，逻辑层
+			// 泥雨（消散产物#3）：本系统附近有消散沙尘暴（muddyFactor，逻辑层
 			// 8s 节流 O(n) 算出）时雨色插向泥褐——沙尘与降水混合的"泥雨"（SAL/湿沉降
 			// 现实机制，跨系统产物）。设置开关 muddyRain 控制。
 			if (TyphoonConfig.I.muddyRain && s.muddyFactor > 0.01)
@@ -2247,7 +2247,7 @@ public class StormRenderer : MonoBehaviour
 			}
 			if (num9 < A.frontQuads)
 			{
-				WriteQuad(A.fV, A.fT, A.fC, num9++, qc, hw, hl, axisRain, val8, 0f);   // v2.0.87 — 长轴=倾斜轴（随风）
+				WriteQuad(A.fV, A.fT, A.fC, num9++, qc, hw, hl, axisRain, val8, 0f);   // 长轴=倾斜轴（随风）
 			}
 		}
 		HideRest(A.fV, A.fC, num9, A.frontQuads);

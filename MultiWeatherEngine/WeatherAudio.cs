@@ -2,11 +2,11 @@ using UnityEngine;
 
 namespace MultiWeatherEngine;
 
-// ===== v2.2.1 — 天气音效：风声/雷声（纯程序化合成，零资源文件） =====
+// ===== — 天气音效：风声/雷声（纯程序化合成，零资源文件） =====
 // 用 Unity 原生 AudioSource + AudioClip.Create 合成波形：
-//   风声 = 布朗噪声（积分白噪声，低频强）2s 循环 + 0.3Hz 呼吸起伏
-//   雷声 = 白噪声 × 指数衰减包络 + 70Hz 低频轰 + 两次延迟回响脉冲（一次性触发）
-// v2.2.1 fix — 删雨声（用户：现实中不要似乎也行）；响度提升（布朗噪声 RMS 低听感轻，
+// 风声 = 布朗噪声（积分白噪声，低频强）2s 循环 + 0.3Hz 呼吸起伏
+// 雷声 = 白噪声 × 指数衰减包络 + 70Hz 低频轰 + 两次延迟回响脉冲（一次性触发）
+// fix — 删雨声（用户：现实中不要似乎也行）；响度提升（布朗噪声 RMS 低听感轻，
 // Normalize 峰值 1.2 + 整体 ×1.25 增益）；首次有声打印日志便于诊断音量链路。
 // 音量由 TyphoonManager.UpdateWeatherAudio 每帧驱动（平滑插值防爆音）。
 public class WeatherAudio : MonoBehaviour
@@ -43,7 +43,7 @@ public class WeatherAudio : MonoBehaviour
 		{
 			return;
 		}
-		// v2.2.1 fix2 — 防御性 Clamp01（设置页 NumberInput 可输入负数/超 1，
+		// fix2 — 防御性 Clamp01（设置页 NumberInput 可输入负数/超 1，
 		// 回调虽 Clamp 但内部值可能残留异常 → 这里兜底）。
 		float vol = TyphoonConfig.I.weatherAudio ? Mathf.Clamp01(TyphoonConfig.I.weatherVolume) : 0f;
 		windSrc.volume = Mathf.MoveTowards(windSrc.volume, targetWind * vol, Time.deltaTime * 2f);
@@ -55,7 +55,7 @@ public class WeatherAudio : MonoBehaviour
 	}
 
 	// 雷声触发（闪电产生时调用；vol 0-1 按风暴距离衰减）
-	// v2.2.1 fix2 — 雷声也乘 weatherVolume（原完全没走音量设置，只受距离衰减控制）。
+	// fix2 — 雷声也乘 weatherVolume（原完全没走音量设置，只受距离衰减控制）。
 	public void PlayThunder(float vol)
 	{
 		if (thunSrc == null || vol <= 0.01f)
