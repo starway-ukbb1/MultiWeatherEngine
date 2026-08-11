@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using SFS.Variables;
 using SFS.World;
 using UnityEngine;
@@ -37,6 +38,10 @@ public class TyphoonHud : MonoBehaviour
 	private Texture2D bottomBg;
 
 	private GUIStyle bottomBox;
+
+	// v2.4.6 — HUD 字符串复用（原每帧 OnGUI 多次字符串拼接 + int/double 隐式装箱，
+	// 每次 UI 事件（Layout/Repaint）都跑 → GC 压力翻倍）。复用 StringBuilder 消除。
+	private readonly StringBuilder sb = new StringBuilder(160);
 
 	private bool init;
 
@@ -91,6 +96,13 @@ public class TyphoonHud : MonoBehaviour
 		{
 			return;
 		}
+		// v2.2.1 fix — 面板仅在飞行场景显示：WorldView.main 只在飞行视图存在，
+		// 建造页面/主菜单为 null。原条件只查玩家位置+系统数——预生成在进世界时播种
+		// 系统，systems 跨场景残留导致建造页面也画面板（用户反馈"面板哪都能出现"）。
+		if (WorldView.main == null)
+		{
+			return;
+		}
 		if (TyphoonManager.GetPlayerLocation() == null && TyphoonManager.systems.Count == 0)
 		{
 			return;
@@ -135,7 +147,10 @@ public class TyphoonHud : MonoBehaviour
 			hdrStyle.normal.textColor = new Color(0.72f, 0.86f, 1f);
 		}
 		GUIStyle hdr = hdrStyle;
-		if (GUI.Button(new Rect(x, y, bw - 20f, 24f), "活跃天气系统 (" + n + ")   " + (exp ? "▼ 点击收起" : "▶ 点击展开"), hdr))
+		// v2.4.6 — StringBuilder + Append(int) 免装箱（原 "(" + n + ")" 触发 int→object 装箱）
+		sb.Clear();
+		sb.Append("活跃天气系统 (").Append(n).Append(")   ").Append(exp ? "▼ 点击收起" : "▶ 点击展开");
+		if (GUI.Button(new Rect(x, y, bw - 20f, 24f), sb.ToString(), hdr))
 		{
 			TyphoonManager.panelExpanded = !TyphoonManager.panelExpanded;
 		}
@@ -146,7 +161,7 @@ public class TyphoonHud : MonoBehaviour
 		}
 		if (!exp)
 		{
-			string sum = "";
+			sb.Clear();
 			for (int i = 0; i < n; i++)
 			{
 				WeatherSystem s = TyphoonManager.systems[i];
@@ -154,13 +169,13 @@ public class TyphoonHud : MonoBehaviour
 				{
 					continue;
 				}
-				if (sum.Length > 0)
+				if (sb.Length > 0)
 				{
-					sum += "  ·  ";
+					sb.Append("  ·  ");
 				}
-				sum += WeatherSystem.TypeName(s.type) + " " + WeatherSystem.StrengthName(s.type, s.category);
+				sb.Append(WeatherSystem.TypeName(s.type)).Append(' ').Append(WeatherSystem.StrengthName(s.type, s.category));
 			}
-			GUI.Label(new Rect(x, y + 28f, bw - 20f, 18f), sum, small);
+			GUI.Label(new Rect(x, y + 28f, bw - 20f, 18f), sb.ToString(), small);
 			return;
 		}
 		y += 30f;
@@ -190,49 +205,49 @@ public class TyphoonHud : MonoBehaviour
 				rowStyle.normal.textColor = new Color(0.82f, 0.9f, 1f);
 			}
 			GUIStyle row = isSel ? rowSelStyle : rowStyle;
-			string stage = s.stage == 0 ? "发展" : (s.stage == 1 ? "成熟" : "消散");
-			// v2.3.0 — 能量制显示（用户：不写死寿命，改能量制 + HUD 阶段名+能量）：
-			// 能量百分比让生命周期永远可感知——下降 = 快消散了，任何时间倍率都看得见。
-			// v2.2（专项 A）— 阶段内重定标（80 是成熟峰，全局 0-100 标尺误导玩家以为能
-			// 充满）：发展 (e-55)/25、成熟 e/80（峰值正好 100%）、消散 e/30。
-			string stageTxt;
+			// v2.4.6 — 整行文本 StringBuilder 复用（消除 int 装箱与多次临时字符串）
+			sb.Clear();
 			if (s.stage == 0)
 			{
-				stageTxt = "发展 能量 " + (WeatherSystem.Clamp01((s.energy - 55.0) / 25.0) * 100.0).ToString("0") + "%";
+				sb.Append("发展 能量 ").Append((WeatherSystem.Clamp01((s.energy - 55.0) / 25.0) * 100.0).ToString("0")).Append('%');
 			}
 			else if (s.stage == 1)
 			{
-				stageTxt = "成熟 能量 " + (WeatherSystem.Clamp01(s.energy / 80.0) * 100.0).ToString("0") + "%  升↗" + (s.naturalProgress * 100.0).ToString("0") + "%";
+				// v2.3.0 — 能量制显示：阶段名+能量（见原注释语义，此处仅构建字符串）
+				sb.Append("成熟 能量 ").Append((WeatherSystem.Clamp01(s.energy / 80.0) * 100.0).ToString("0")).Append("%  升↗").Append((s.naturalProgress * 100.0).ToString("0")).Append('%');
 			}
 			else
 			{
-				stageTxt = "消散 能量 " + (WeatherSystem.Clamp01(s.energy / 30.0) * 100.0).ToString("0") + "%";
+				sb.Append("消散 能量 ").Append((WeatherSystem.Clamp01(s.energy / 30.0) * 100.0).ToString("0")).Append('%');
 			}
-			string phen = "";
+			string stageTxt = sb.ToString();
+			sb.Clear();
 			if (s.tornadoes.Count > 0)
 			{
-				// v2.0.98 — 龙卷Lv 字样删除（用户要求）：只显示数量，强度跟母体。
-				phen += " 龙卷×" + s.tornadoes.Count;
+				sb.Append(" 龙卷×").Append(s.tornadoes.Count);
 			}
 			if (s.downbursts.Count > 0)
 			{
-				phen += " 下暴×" + s.downbursts.Count;
+				sb.Append(" 下暴×").Append(s.downbursts.Count);
 			}
 			if (s.gustFronts.Count > 0)          // v2.1.2
 			{
-				phen += " 阵风锋×" + s.gustFronts.Count;
+				sb.Append(" 阵风锋×").Append(s.gustFronts.Count);
 			}
 			if (s.lightningBursts.Count > 0)     // v2.1.2
 			{
-				phen += " 闪电×" + s.lightningBursts.Count;
+				sb.Append(" 闪电×").Append(s.lightningBursts.Count);
 			}
+			string phen = sb.ToString();
 			// v2.4.5 — F8 超限标记：category > 类型自然上限（maxCat）时标 ⚠超限（god mode
 			// 实验自由不强制回落，但明示玩家"这等级不是自然的"）。
 			string over = (s.category > WeatherSystem.Spec[(int)s.type].maxCat) ? "⚠超限 " : "";
-			string txt = (isSel ? "▶ " : "  ") + WeatherSystem.TypeName(s.type) + " " + GradeName(s)
-				+ over + " [" + stageTxt + "]" + phen
-				+ "  峰风 " + s.vmaxDisplay.ToString("0") + "m/s 半径 " + (s.Rmax / 1000.0).ToString("0.##") + "km 云顶 " + (s.Htop / 1000.0).ToString("0.0") + "km"   // v2.3.8.7 — 紧凑格式省宽
-				+ DistTo(s);
+			sb.Clear();
+			sb.Append(isSel ? "▶ " : "  ").Append(WeatherSystem.TypeName(s.type)).Append(' ').Append(GradeName(s));
+			sb.Append(over).Append(" [").Append(stageTxt).Append(']').Append(phen);
+			sb.Append("  峰风 ").Append(s.vmaxDisplay.ToString("0")).Append("m/s 半径 ").Append((s.Rmax / 1000.0).ToString("0.##")).Append("km 云顶 ").Append((s.Htop / 1000.0).ToString("0.0")).Append("km");   // v2.3.8.7 — 紧凑格式省宽
+			sb.Append(DistTo(s));
+			string txt = sb.ToString();
 			if (GUI.Button(new Rect(x, y, bw - 20f, 22f), txt, row))
 			{
 				main.selected = s;
@@ -293,7 +308,9 @@ public class TyphoonHud : MonoBehaviour
 			// v2.0.98 — HUD 下移（用户要求）+ 删视距/缩放空间字样。v2.3.8.7 — 宽度对齐详情面板 430。
 			Rect v0 = new Rect(14f, 58f, 430f, 48f);
 			GUI.Box(v0, GUIContent.none, box);
-			GUI.Label(new Rect(28f, 64f, 300f, 20f), "TYPHOON — 待机  系统 " + TyphoonManager.systems.Count, header);
+			sb.Clear();
+			sb.Append("TYPHOON — 待机  系统 ").Append(TyphoonManager.systems.Count);
+			GUI.Label(new Rect(28f, 64f, 300f, 20f), sb.ToString(), header);
 			GUI.Label(new Rect(28f, 86f, 400f, 18f), "[F6] 菜单  [Shift+F7] 隐藏", small);
 			return;
 		}
@@ -308,19 +325,28 @@ public class TyphoonHud : MonoBehaviour
 		// v2.0.85 — 多实例：显示数量（龙卷×N 下暴×M）。
 		string phen = (s.tornadoes.Count > 0 ? "  龙卷×" + s.tornadoes.Count : "") + (s.downbursts.Count > 0 ? "  下暴×" + s.downbursts.Count : "");
 		string over2 = (s.category > WeatherSystem.Spec[(int)s.type].maxCat) ? "⚠超限 " : "";   // v2.4.5 F8 超限标记
-		GUI.Label(new Rect(num2, num3, rowW, 20f), "◎ " + WeatherSystem.TypeName(s.type) + "  " + GradeName(s) + over2 + "  [" + (s.stage == 0 ? "发展" : (s.stage == 1 ? "成熟" : "消散")) + "]" + phen, header);
+		// v2.4.6 — 标题行 StringBuilder（原多段拼接 + int 装箱）
+		sb.Clear();
+		sb.Append("◎ ").Append(WeatherSystem.TypeName(s.type)).Append("  ").Append(GradeName(s)).Append(over2).Append("  [").Append(s.stage == 0 ? "发展" : (s.stage == 1 ? "成熟" : "消散")).Append(']').Append(phen);
+		GUI.Label(new Rect(num2, num3, rowW, 20f), sb.ToString(), header);
 		GUI.color = Color.white;
 		num3 += 22f;
 		// v2.3.8.7 — 排版：峰值风行拆两行（原一行 322px 塞 峰值风+km/h+云底+云顶+移速 ~400px 溢出裁切）
-		GUI.Label(new Rect(num2, num3, rowW, 18f), "峰值风 " + s.EyewallWind.ToString("0") + " m/s (" + (s.EyewallWind * 3.6).ToString("0") + " km/h)    移速 " + s.drift.ToString("0.#") + " m/s", small);   // v2.4.3 待办5 🟡-8：口径统一为 EyewallWind（基准 PeakWind × 眼壁 1.2）
+		sb.Clear();
+		sb.Append("峰值风 ").Append(s.EyewallWind.ToString("0")).Append(" m/s (").Append((s.EyewallWind * 3.6).ToString("0")).Append(" km/h)    移速 ").Append(s.drift.ToString("0.#")).Append(" m/s");
+		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);   // v2.4.3 待办5 🟡-8：口径统一为 EyewallWind（基准 PeakWind × 眼壁 1.2）
 		num3 += 20f;
-		GUI.Label(new Rect(num2, num3, rowW, 18f), "云底 " + (s.Hbase / 1000.0).ToString("0.00") + " km    云顶 " + (s.Htop / 1000.0).ToString("0.0") + " km", small);
+		sb.Clear();
+		sb.Append("云底 ").Append((s.Hbase / 1000.0).ToString("0.00")).Append(" km    云顶 ").Append((s.Htop / 1000.0).ToString("0.0")).Append(" km");
+		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);
 		num3 += 20f;
 		// v2.1.4 — 地形行移出 pValid 分支（用户：HUD 没显示地形）：地形是风暴自身属性，
 		// 与玩家位置无关——只要选中系统就显示（原嵌在 pValid 分支，玩家不在风暴范围
 		// 走 else 分支整行不渲染）。v2.1.5 — 所有风暴都显示地形（用户：地形对所有风暴
 		// 生效），"已登陆·衰减中"后缀仅台风（雷暴无登陆衰减概念）。
-		GUI.Label(new Rect(num2, num3, rowW, 18f), "地形 " + WeatherSystem.TerrainName(s.terrainKind) + ((s.type == StormType.Typhoon && s.overLand) ? "（已登陆·衰减中）" : ""), label);
+		sb.Clear();
+		sb.Append("地形 ").Append(WeatherSystem.TerrainName(s.terrainKind)).Append((s.type == StormType.Typhoon && s.overLand) ? "（已登陆·衰减中）" : "");
+		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 		num3 += 20f;
 		// v2.3.1 — 台风海温显示（用户：冷水会冷死台风）：海上显示中心海温 + 冷暖状态，
 		// 冷海水（<24°C）台风能量快速枯竭。
@@ -329,10 +355,16 @@ public class TyphoonHud : MonoBehaviour
 		if (s.type == StormType.Typhoon)
 		{
 			string sstLabel = (s.atmoClass == 2) ? "供能" : "海温";
-			string sstTxt = (s.terrainKind == TerrainKind.Ocean)
-				? sstLabel + " " + s.sstDisplay.ToString("0.0") + "°C " + (s.sstDisplay >= 26.8 ? "（暖水·增强）" : ((s.sstDisplay >= 24.0) ? "（临界）" : "（冷水·快速衰减）"))
-				: sstLabel + " 无（已登陆）";
-			GUI.Label(new Rect(num2, num3, rowW, 18f), sstTxt, label);
+			sb.Clear();
+			if (s.terrainKind == TerrainKind.Ocean)
+			{
+				sb.Append(sstLabel).Append(' ').Append(s.sstDisplay.ToString("0.0")).Append("°C ").Append(s.sstDisplay >= 26.8 ? "（暖水·增强）" : ((s.sstDisplay >= 24.0) ? "（临界）" : "（冷水·快速衰减）"));
+			}
+			else
+			{
+				sb.Append(sstLabel).Append(" 无（已登陆）");
+			}
+			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 			num3 += 20f;
 		}
 		if ((Object)main != (Object)null && main.pValid)
@@ -342,28 +374,40 @@ public class TyphoonHud : MonoBehaviour
 			double pU = main.pU;
 			double pW = main.pW;
 			double num5 = Math.Sqrt(pU * pU + pW * pW);
-			GUI.Label(new Rect(num2, num3, rowW, 18f), "本地风  " + num5.ToString("0.0") + " m/s   (" + (num5 * 3.6).ToString("0") + " km/h)  = " + WeatherSystem.Beaufort(num5) + "级", label);
+			sb.Clear();
+			sb.Append("本地风  ").Append(num5.ToString("0.0")).Append(" m/s   (").Append((num5 * 3.6).ToString("0")).Append(" km/h)  = ").Append(WeatherSystem.Beaufort(num5).ToString()).Append("级");
+			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 			num3 += 20f;
-			GUI.Label(new Rect(num2, num3, rowW, 18f), "  水平 " + ((pU >= 0.0) ? "→ " : "← ") + Math.Abs(pU).ToString("0.0") + "    垂直 " + ((pW >= 0.0) ? "↑ " : "↓ ") + Math.Abs(pW).ToString("0.0") + " m/s", label);
+			sb.Clear();
+			sb.Append("  水平 ").Append(pU >= 0.0 ? "→ " : "← ").Append(Math.Abs(pU).ToString("0.0")).Append("    垂直 ").Append(pW >= 0.0 ? "↑ " : "↓ ").Append(Math.Abs(pW).ToString("0.0")).Append(" m/s");
+			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 			num3 += 20f;
-			GUI.Label(new Rect(num2, num3, rowW, 18f), "真空速 " + main.pAirspeed.ToString("0.0") + " m/s    高度 " + (main.pH / 1000.0).ToString("0.00") + " km", label);
+			sb.Clear();
+			sb.Append("真空速 ").Append(main.pAirspeed.ToString("0.0")).Append(" m/s    高度 ").Append((main.pH / 1000.0).ToString("0.00")).Append(" km");
+			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 			num3 += 20f;
 			// v2.0.93 — HUD 不再对非台风无差别套用台风结构（用户发现）：台风显示 距风眼+11区名+
 			// 风圈；非台风只显示 距中心+ρ（风眼/风圈是台风专属概念）。
 			if (s.type == StormType.Typhoon)
 			{
-				GUI.Label(new Rect(num2, num3, rowW, 18f), "距风眼 " + (num4 / 1000.0).ToString("0.0") + " km   (ρ=" + rho.ToString("0.00") + ")  " + Zone(rho, s, main.pS), label);
+				sb.Clear();
+				sb.Append("距风眼 ").Append((num4 / 1000.0).ToString("0.0")).Append(" km   (ρ=").Append(rho.ToString("0.00")).Append(")  ").Append(Zone(rho, s, main.pS));
+				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 				num3 += 20f;
 				// v2.0.83 — 风圈半径（用户：7/10/12 级风圈概念）：当前风场配置下各等级风圈最远半径。
 				double cr7 = s.WindCircleRoCached(13.9);   // v2.1.1 — 缓存版
 				double cr10 = s.WindCircleRoCached(24.5);
 				double cr12 = s.WindCircleRoCached(32.7);
-				GUI.Label(new Rect(num2, num3, rowW, 18f), "风圈 7级≈" + (cr7 * s.Rmax / 1000.0).ToString("0") + "km  10级≈" + (cr10 * s.Rmax / 1000.0).ToString("0") + "km  12级≈" + (cr12 * s.Rmax / 1000.0).ToString("0") + "km", label);
+				sb.Clear();
+				sb.Append("风圈 7级≈").Append((cr7 * s.Rmax / 1000.0).ToString("0")).Append("km  10级≈").Append((cr10 * s.Rmax / 1000.0).ToString("0")).Append("km  12级≈").Append((cr12 * s.Rmax / 1000.0).ToString("0")).Append("km");
+				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 				num3 += 20f;
 			}
 			else
 			{
-				GUI.Label(new Rect(num2, num3, rowW, 18f), "距中心 " + (num4 / 1000.0).ToString("0.0") + " km   (ρ=" + rho.ToString("0.00") + ")  风级 " + WeatherSystem.Beaufort(num5) + "级", label);
+				sb.Clear();
+				sb.Append("距中心 ").Append((num4 / 1000.0).ToString("0.0")).Append(" km   (ρ=").Append(rho.ToString("0.00")).Append(")  风级 ").Append(WeatherSystem.Beaufort(num5).ToString()).Append("级");
+				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
 				num3 += 20f;
 			}
 			num3 += 20f;
@@ -398,7 +442,9 @@ public class TyphoonHud : MonoBehaviour
 			num3 += 60f;
 		}
 		// v2.2.5 — 视距数据面板显示（用户：把视距数据在面板显示）
-		GUI.Label(new Rect(num2, num3, rowW, 18f), "视距 " + ViewDist().ToString("0") + " m", small);
+		sb.Clear();
+		sb.Append("视距 ").Append(ViewDist().ToString("0")).Append(" m");
+		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);
 		num3 += 20f;
 		// v2.0.98 — 删视距/缩放空间字样（用户要求）；键位提示精简（F1/Shift+F8 已删）。
 		GUI.Label(new Rect(num2, num3, rowW, 18f), "[F6] 菜单  [F7] 解散  [F8] 强度  [F9] 面板  [Shift+F7] 隐藏", small);
@@ -425,6 +471,6 @@ public class TyphoonHud : MonoBehaviour
 		// 现在直接调 WindZoneIndex → 显示 11 区名 + 区号（v2.2 — 风区偏移调试已移除）。
 		double sWind = pS;
 		int zi = WeatherSystem.WindZoneIndex(sWind / s.Rmax);
-		return "[" + zi + "]" + StormRenderer.windZoneNames[zi];
+		return "[" + zi.ToString() + "]" + StormRenderer.windZoneNames[zi];   // v2.4.6 — zi.ToString() 免 int 装箱
 	}
 }

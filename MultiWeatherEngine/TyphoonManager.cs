@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using HarmonyLib;
 using SFS;
 using SFS.UI;
 using SFS.Variables;
@@ -54,7 +57,11 @@ public class TyphoonManager : MonoBehaviour
 
 	private double lastWorldTime = double.NaN;
 
-	private string lastWorldKey = "";   // v2.2.1 — 世界变化检测（星球 codeName + 小时级 worldTime）
+	// v2.4.6 — 世界变化检测：原每帧拼 `codeName + "_" + hour` 字符串比较（每帧 GC 分配），
+	// 改 code/hour 分离存储，仅整数/引用比较，字符串只在真正变化时构造。
+	private string lastWorldCode = "";
+
+	private long lastWorldHour = -1;
 
 	private float shakeCooldown;
 
@@ -95,6 +102,8 @@ public class TyphoonManager : MonoBehaviour
 	{
 		main = this;
 		hud = ((Component)this).gameObject.AddComponent<TyphoonHud>();
+		// v2.2.1 — 天气音效（程序化合成雷/风/雨）
+		((Component)this).gameObject.AddComponent<WeatherAudio>();
 	}
 
 	public static Location ToAirspeedFrame(Location loc)
@@ -135,14 +144,41 @@ public class TyphoonManager : MonoBehaviour
 
 	private void Update()
 	{
+		CheckSceneBoundary();
 		HandleInput();
 		AdvanceSystems();
 		NaturalSpawn();
 		CheckWorldChange();
-		DrawMapMarkers();
 		TryMergeAll();
 		ProbePlayer();
 		ApplyShake();
+		UpdateWeatherAudio();
+	}
+
+	// v2.2.1 fix — 飞行场景边界检测：WorldView.main 只在飞行视图存在。从飞行场景
+	// （WorldView.main != null）切到建造/主菜单（== null）时，清空所有天气系统——
+	// 它们属于旧世界（行星引用可能已失效），残留会导致 HUD 面板/系统列表跨场景乱入
+	// （用户反馈"面板在建造页面都能出现"）。边沿触发：只在 有→无 瞬间清一次。
+	private bool lastInWorld;
+
+	private void CheckSceneBoundary()
+	{
+		bool inWorld = WorldView.main != null;
+		if (lastInWorld && !inWorld)
+		{
+			for (int i = systems.Count - 1; i >= 0; i--)
+			{
+				RemoveSystemAt(i);
+			}
+			selected = null;
+			menuOpen = false;
+			thunderCount.Clear();
+			lastWorldCode = "";
+			lastWorldHour = -1;
+			lastWorldTime = double.NaN;
+			Msg("离开世界，天气系统已清空");
+		}
+		lastInWorld = inWorld;
 	}
 
 	// v2.0.7 — LateUpdate（在 SFS 的 UpdatePostProcessing 之后）叠加海浪增强 + 近距风暴变灰。
@@ -518,12 +554,14 @@ public class TyphoonManager : MonoBehaviour
 			{
 				wt = vwt.worldTime;
 			}
-			string key = pl.planet.codeName + "_" + ((long)(wt / 3600.0)).ToString();
-			if (key == lastWorldKey)
+			string code = pl.planet.codeName;
+			long hour = (long)(wt / 3600.0);
+			if (code == lastWorldCode && hour == lastWorldHour)
 			{
 				return;
 			}
-			lastWorldKey = key;
+			lastWorldCode = code;
+			lastWorldHour = hour;
 			PreSpawnCurrentPlanet(pl);
 		}
 		catch
@@ -563,27 +601,27 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	// ===== v2.2.1 — 地图标记：M 地图视图显示风暴点+文字标签（颜色=强度色） =====
-	// 走 SFS.World.Maps：MapDrawer.DrawPointWithText（点+文字一步），位置 = 风暴中心
-	// 行星局部坐标 → GetPosition（mapHolder + pos/1000）。节流 1s 防闪烁/费性能。
-	private float mapMarkerTimer = 0f;
+	// ===== v2.2.1 — 地图标记：M 地图视图显示风暴轮廓+点+文字标签（颜色=强度色） =====
+	// v2.2.1 fix — 关键修正（参考 AeroTrajectory mod）：地图元素每帧被 MapManager.DrawMap
+	// 开头 DrawReset() 清空——在 Update 里画必被清掉，必须用 Harmony Transpiler patch 插进
+	// DrawMap（DrawTrajectories 之后、DrawReset 之后）才能活下来。文字/点用世界坐标 xy
+	// （mapHolder.position + pos/1000，DrawTextElement 内部补 z = 视距/1000）；
+	// 轮廓用 Map.solidLine.DrawLine（线挂 planet.mapHolder，局部坐标 ÷1000）。
+	// v2.4.6 — 地图标记矩形顶点复用（原每帧 new Vector3[5]×2 → 静态复用，地图开着时
+	// 每帧省 2 次数组分配；DrawLine 同步消费不保留引用，安全）。
+	private static readonly Vector3[] s_mapPts = new Vector3[5];
 
-	private void DrawMapMarkers()
+	public static void DrawMapMarkers()
 	{
-		if (!TyphoonConfig.I.mapMarkers)
-		{
-			return;
-		}
-		mapMarkerTimer -= Time.deltaTime;
-		if (mapMarkerTimer > 0f)
-		{
-			return;
-		}
-		mapMarkerTimer = 1f;
 		try
 		{
-			// 判空保护：未进世界/地图系统未初始化时 elementDrawer 为 null。
+			// 判空保护：未进世界/地图系统未初始化时 elementDrawer 为 null；
+			// 地图关着（mapMode=false）时直接跳过（省性能，DrawMap 每帧都会跑）。
 			if (Map.manager == null || !Map.manager.mapMode.Value || Map.elementDrawer == null)
+			{
+				return;
+			}
+			if (!TyphoonConfig.I.mapMarkers)
 			{
 				return;
 			}
@@ -595,15 +633,69 @@ public class TyphoonManager : MonoBehaviour
 					continue;
 				}
 				Double2 c = s.MergedStormC();
-				Vector2 pos = (Vector2)MapDrawer.GetPosition(s.planet, c);
 				Color col = Category.Tint[s.category];
+				// v2.2.1 fix3 — 所有风暴轮廓改矩形（用户：所有风暴改矩形）：
+				// 核心矩形半边长 = Rmax（边长 2Rmax = 风暴核心直径，与原圆半径直接对应；
+				// 外接圆半径 √2×Rmax ≈ 1.41Rmax，方块比圆多包 41% 角区——要方块就按方块算）。
+				// 矩形 4 角 + 闭合回起点 = 5 顶点；行星局部坐标 ÷1000 直接喂 LineDrawer
+				// （线挂 planet.mapHolder，DrawReset 每帧清池不累积）。平面近似，小范围够用。
+				if (Map.solidLine != null)
+				{
+					double h = s.Rmax;
+					Vector3[] pts = s_mapPts;   // v2.4.6 — 复用静态数组
+					pts[0] = (Vector3)(Vector2)((c + new Double2(-h, -h)) / 1000.0);
+					pts[1] = (Vector3)(Vector2)((c + new Double2(h, -h)) / 1000.0);
+					pts[2] = (Vector3)(Vector2)((c + new Double2(h, h)) / 1000.0);
+					pts[3] = (Vector3)(Vector2)((c + new Double2(-h, h)) / 1000.0);
+					pts[4] = pts[0];   // 闭合
+					Map.solidLine.DrawLine(pts, s.planet, col, col);
+				}
+				// 台风外围：虚线矩形（半边长 2.5×Rmax → 边长 5Rmax，对应原 2.5Rmax 虚线环直径；
+				// Router=9Rmax 太大不画，2.5Rmax ≈ 外围雨带范围）。
+				if (s.type == StormType.Typhoon && Map.dashedLine != null)
+				{
+					double h2 = s.Rmax * 2.5;
+					Vector3[] pts = s_mapPts;   // v2.4.6 — 复用静态数组
+					Color dim = new Color(col.r, col.g, col.b, 0.6f);
+					pts[0] = (Vector3)(Vector2)((c + new Double2(-h2, -h2)) / 1000.0);
+					pts[1] = (Vector3)(Vector2)((c + new Double2(h2, -h2)) / 1000.0);
+					pts[2] = (Vector3)(Vector2)((c + new Double2(h2, h2)) / 1000.0);
+					pts[3] = (Vector3)(Vector2)((c + new Double2(-h2, h2)) / 1000.0);
+					pts[4] = pts[0];
+					Map.dashedLine.DrawLine(pts, s.planet, dim, dim);
+				}
+				Vector2 pos = (Vector2)MapDrawer.GetPosition(s.planet, c);
 				string txt = WeatherSystem.TypeName(s.type) + "C" + s.category + " " + (WeatherSystem.Clamp01(s.energy / 80.0) * 100.0).ToString("0") + "%";
 				Vector2 normal = (Vector2)c.normalized;
-				MapDrawer.DrawPointWithText(16, col, txt, 12, col, pos, normal, 0, 0);
+				MapDrawer.DrawPointWithText(40, col, txt, 44, col, pos, normal, 0, 0);
 			}
 		}
 		catch
 		{
+		}
+	}
+
+	// v2.2.1 fix — Harmony Transpiler patch MapManager.DrawMap：在 DrawTrajectories() 调用后
+	// 插入 DrawMapMarkers()（此时 DrawReset 已执行完，画的东西能活到渲染）。
+	[HarmonyPatch(typeof(MapManager), "DrawMap")]
+	private static class MapManager_DrawMap_Patch
+	{
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			List<CodeInstruction> list = instructions.ToList();
+			CodeInstruction[] insert = new CodeInstruction[1]
+			{
+				CodeInstruction.Call(typeof(TyphoonManager), "DrawMapMarkers")
+			};
+			for (int i = 0; i < list.Count; i++)
+			{
+				if (CodeInstructionExtensions.Calls(list[i], AccessTools.Method(typeof(MapManager), "DrawTrajectories")))
+				{
+					list.InsertRange(i + 1, insert);
+					return list;
+				}
+			}
+			return list;
 		}
 	}
 
@@ -669,6 +761,7 @@ public class TyphoonManager : MonoBehaviour
 				big.Rmax = Math.Min(big.Rmax * (1.0 + 0.12 * gain), big.rmaxBase * 3.0);
 				big.Router = big.Rmax * 9.0;
 				big.Vmax = Math.Min(big.Vmax * (1.0 + 0.08 * gain), big.vmaxBase * 2.0);
+				big.MarkWindCirclesDirty();   // v2.4.6 — 合并改 Rmax/Router → 风圈缓存失效
 				// v2.0.99 — 修复：v2.0.98 强度平滑后风场用 vmaxDisplay，合并增强直接改 Vmax
 				// 不生效（回归）。同步 vmaxTarget → display 平滑爬升 3 秒呈现合并增强。
 				// v2.3.7 — 审查二轮：同步 vmaxTargetBase（原漏同步 → 能量驱动公式下一帧把
@@ -704,6 +797,11 @@ public class TyphoonManager : MonoBehaviour
 
 	private void HandleInput()
 	{
+		// v2.2.1 fix — 快捷键仅在飞行场景生效（建造/主菜单按 F6-F9 不改变任何状态）。
+		if (WorldView.main == null)
+		{
+			return;
+		}
 		bool flag = Input.GetKey((KeyCode)304) || Input.GetKey((KeyCode)303);
 		if (Input.GetKeyDown((KeyCode)288)) // F7 — 仅解散选中系统（召唤走 F6 菜单）
 		{
@@ -896,6 +994,9 @@ public class TyphoonManager : MonoBehaviour
 				continue;
 			}
 			sys.Probe(playerLocation.position, out var s, out var h, out var u, out var w);
+			// v2.4.6 — 合并重复采样：原最近系统分支与叠加分支各调一次 SampleWindLocal（参数
+			// 完全相同），每帧省一次全系统风采样（SampleComponents + 附属矢量风计算）。
+			Double2 vecW = sys.SampleWindLocal(s, h, playerLocation.position);
 			if (Math.Abs(s) < nearestDist)
 			{
 				nearestDist = Math.Abs(s);
@@ -904,13 +1005,12 @@ public class TyphoonManager : MonoBehaviour
 				pH = h;
 				// v2.0.23 — HUD 显示改用矢量风分解（含龙卷螺旋/下击暴流辐散）：
 				// pU=行星切向分量、pW=行星径向（垂直）分量。
-				Double2 vecW = sys.SampleWindLocal(s, h, playerLocation.position);
 				Double2 nrm2 = playerLocation.position.normalized;
 				Double2 tanV = new Double2(0.0 - nrm2.y, nrm2.x);
 				pU = Double2.Dot(vecW, tanV);
 				pW = Double2.Dot(vecW, nrm2);
 			}
-			wind += sys.SampleWindLocal(s, h, playerLocation.position);
+			wind += vecW;
 			any = true;
 		}
 		if (!any)
@@ -989,9 +1089,78 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
+	// ===== v2.2.1 — 天气音效驱动：风声按风暴强度×距离衰减，闪电触发雷声 =====
+	// v2.2.1 fix — 范围衰减重做：reach 8→2.5Rmax + falloff 平方（1/(1+(d/reach)²)，
+	// 玩家进出风暴音量明显变化——原 8Rmax 下可视范围 falloff≈1 恒不变"没范围"）。
+	private readonly Dictionary<WeatherSystem, int> thunderCount = new Dictionary<WeatherSystem, int>();
+
+	private void UpdateWeatherAudio()
+	{
+		WeatherAudio audio = WeatherAudio.main;
+		if (audio == null)
+		{
+			return;
+		}
+		try
+		{
+			Location pl = GetPlayerLocation();
+			if (pl == null || (Object)pl.planet == (Object)null || !pl.planet.HasAtmospherePhysics)
+			{
+				audio.targetWind = 0f;
+				return;
+			}
+			float wind = 0f;
+			for (int i = 0; i < systems.Count; i++)
+			{
+				WeatherSystem s = systems[i];
+				if (s == null || !s.active || (Object)s.planet == (Object)null || (Object)s.planet != (Object)pl.planet)
+				{
+					continue;
+				}
+				double da = s.centerAngle - pl.position.AngleRadians;
+				while (da > Math.PI)
+				{
+					da -= Math.PI * 2.0;
+				}
+				while (da < -Math.PI)
+				{
+					da += Math.PI * 2.0;
+				}
+				double dist = Math.Abs(da) * pl.planet.Radius;
+				double reach = Math.Max(s.Rmax * 2.5, 1.0);   // 影响半径 2.5 Rmax
+				double dRatio = dist / reach;
+				double falloff = 1.0 / (1.0 + dRatio * dRatio);   // 平方衰减：1Rmax 内 ~0.86，2Rmax ~0.25
+				double vf = Math.Min(s.Vmax / 45.0, 1.0);     // 风速强度 0-1（45 m/s 满）
+				wind += (float)(vf * falloff);
+				// 雷声：lightningBursts 新增 → 触发（音量按距离衰减）
+				int cur = s.lightningBursts.Count;
+				if (thunderCount.TryGetValue(s, out int prev) && cur > prev)
+				{
+					audio.PlayThunder((float)falloff);
+				}
+				thunderCount[s] = cur;
+			}
+			// 字典防泄漏：系统移除后旧 key 不再出现，超出上限直接重建（最多漏一次雷声）
+			if (thunderCount.Count > systems.Count + 4)
+			{
+				thunderCount.Clear();
+			}
+			audio.targetWind = Mathf.Clamp01(wind);
+		}
+		catch
+		{
+		}
+	}
+
 	// ===== F6 气象菜单（v2.0.13 横版 · 可拖动 · 深空色系） =====
 	private void OnGUI()
 	{
+		// v2.2.1 fix — 菜单仅在飞行场景显示（WorldView.main null = 建造/主菜单）；
+		// 防止 menuOpen 状态跨场景残留导致建造页面也弹菜单。
+		if (WorldView.main == null)
+		{
+			return;
+		}
 		if (!menuOpen || !TyphoonConfig.I.hud)
 		{
 			return;
@@ -1101,7 +1270,8 @@ public class TyphoonManager : MonoBehaviour
 				mTb.normal.textColor = new Color(0.85f, 0.92f, 1f);
 			}
 			GUIStyle tb = sel ? mTbSel : mTb;
-			if (GUI.Button(new Rect(bx, by, cw, ch), WeatherSystem.Spec[i].name + "\n" + WeatherSystem.Spec[i].desc, tb))
+			// v2.4.6 — 类型按钮名称+简介预拼接缓存（原每帧每按钮拼接字符串）
+			if (GUI.Button(new Rect(bx, by, cw, ch), SpecLabel(i), tb))
 			{
 				selectedType = i;
 				Location loc = GetPlayerLocation();
@@ -1185,18 +1355,19 @@ public class TyphoonManager : MonoBehaviour
 			}
 		}
 		y += 32f;
-		// 底部信息：选中系统状态
-		string info;
+		// 底部信息：选中系统状态（v2.4.6 — StringBuilder 复用，避免每帧多次字符串拼接）
+		StringBuilder sb = s_sb;
+		sb.Clear();
 		if (selected != null && selected.active)
 		{
-			info = "已选中  " + WeatherSystem.TypeName(selected.type) + "  " + WeatherSystem.StrengthName(selected.type, selected.category)
-				+ "  [" + (selected.stage == 0 ? "发展" : (selected.stage == 1 ? "成熟" : "消散")) + "]"
-				+ "  峰风 " + selected.Vmax.ToString("0") + " m/s  半径 " + (selected.Rmax / 1000.0).ToString("0.##") + " km  云顶 " + (selected.Htop / 1000.0).ToString("0.0") + " km"
-				+ "   [F8] 换档 [F7] 解散";
+			sb.Append("已选中  ").Append(WeatherSystem.TypeName(selected.type)).Append("  ").Append(WeatherSystem.StrengthName(selected.type, selected.category));
+			sb.Append("  [").Append(selected.stage == 0 ? "发展" : (selected.stage == 1 ? "成熟" : "消散")).Append(']');
+			sb.Append("  峰风 ").Append(selected.Vmax.ToString("0")).Append(" m/s  半径 ").Append((selected.Rmax / 1000.0).ToString("0.##")).Append(" km  云顶 ").Append((selected.Htop / 1000.0).ToString("0.0")).Append(" km");
+			sb.Append("   [F8] 换档 [F7] 解散");
 		}
 		else
 		{
-			info = "未选中系统 — 在底部监控面板点击风暴后，方可添加龙卷 / 下击暴流";
+			sb.Append("未选中系统 — 在底部监控面板点击风暴后，方可添加龙卷 / 下击暴流");
 		}
 		// v2.3.8 优化#2 — infoSt 缓存
 		if (mInfo == null)
@@ -1207,7 +1378,7 @@ public class TyphoonManager : MonoBehaviour
 			mInfo.normal.textColor = new Color(0.78f, 0.88f, 1f);
 		}
 		GUIStyle infoSt = mInfo;
-		GUI.Label(new Rect(x, y, bw - 28f, 20f), info, infoSt);
+		GUI.Label(new Rect(x, y, bw - 28f, 20f), sb.ToString(), infoSt);
 	}
 
 	// v2.0.13 — 附属现象统一入口：强制基于底部面板选中系统 + 类型检测。
@@ -1290,6 +1461,26 @@ public class TyphoonManager : MonoBehaviour
 		}
 		return lineTex;
 	}
+
+	// v2.4.6 — 类型按钮文案预拼接缓存（name + "\n" + desc，Spec 静态不变 → 只拼一次）。
+	private static string[] specLabels;
+
+	private static string SpecLabel(int i)
+	{
+		if (specLabels == null)
+		{
+			WeatherSystem.TypeSpec[] spec = WeatherSystem.Spec;
+			specLabels = new string[spec.Length];
+			for (int k = 0; k < spec.Length; k++)
+			{
+				specLabels[k] = spec[k].name + "\n" + spec[k].desc;
+			}
+		}
+		return specLabels[i];
+	}
+
+	// v2.4.6 — 菜单底部信息 StringBuilder 复用（原每帧多次字符串拼接）。
+	private static readonly StringBuilder s_sb = new StringBuilder(128);
 
 	// v2.3.8.6 — UI 中文字体（用户：找 UI 问题——SFS 默认字体 FuturaPTBook SDF 无中文
 	// 字形，HUD/菜单全部中文显示方块 □，日志 \u8D28 was not found 刷屏）。运行时从 OS

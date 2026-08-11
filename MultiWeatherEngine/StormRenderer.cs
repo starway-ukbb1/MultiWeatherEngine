@@ -215,7 +215,9 @@ public class StormRenderer : MonoBehaviour
 		}
 		if (val == null)
 		{
-			SpriteRenderer val2 = UnityEngine.Object.FindObjectOfType<SpriteRenderer>();
+			// v2.4.6 — FindObjectOfType 已过时（CS0618）；FindAnyObjectByType 更快（不要求
+			// 最新实例，且不整场景遍历排序）。此 fallback 仅在 7 个内置 shader 全失败时触发。
+			SpriteRenderer val2 = UnityEngine.Object.FindAnyObjectByType<SpriteRenderer>();
 			if (val2 != null && val2.sharedMaterial != null)
 			{
 				val = val2.sharedMaterial.shader;
@@ -1185,6 +1187,10 @@ public class StormRenderer : MonoBehaviour
 		// 全链淡出——粒子/附属/雨 alpha 统一乘 DissolveFade（1→0），寿命到头移除时已
 		// 渐隐完毕，不再"啪"一下整团消失。
 		float dissolveFade = s.DissolveFade();
+		// v2.4.6 — 每帧常量缓存：原粒子循环与附属现象循环内每 quad 调 MergeFade()/
+		// TransitionBlend()（方法调用 + 分支），本帧内取值不变 → 缓存一次全帧复用。
+		float mergeFade = s.MergeFade();
+		double transBlend = s.TransitionBlend();
 		// v2.2.8 — 风暴中心速度（drift 切向）：粒子绝对速度 = 相对风（SampleWind false）+
 		// 本速度（跟随风暴整体移动）——修复原 SampleWind 含不均匀 drift 分量（中心
 		// 0.675×drift < 风暴速度 1.0×drift）把粒子推挤到 4.6Rmax 重生消失的"从左到右消"。
@@ -1244,8 +1250,8 @@ public class StormRenderer : MonoBehaviour
 				if (Time.time - dbgOutLogT > 2f)
 				{
 					dbgOutLogT = Time.time;
-					Debug.Log("[MWE] 粒子出界重生 +s:" + dbgOutPos + " -s:" + dbgOutNeg + " 总:" + dbgOutCount
-						+ " type:" + s.type + " age:" + s.age.ToString("F0")
+					Debug.Log("[MWE] 粒子出界重生 +s:" + dbgOutPos.ToString() + " -s:" + dbgOutNeg.ToString() + " 总:" + dbgOutCount.ToString()
+						+ " type:" + s.type.ToString() + " age:" + s.age.ToString("F0")
 						+ " drift:" + s.drift.ToString("F1") + " vmax:" + s.vmaxDisplay.ToString("F0")
 						+ " windU:" + val.x.ToString("F2") + " windW:" + val.y.ToString("F2")
 						+ " s2/R:" + (s2 / s.Rmax).ToString("F1"));
@@ -1412,8 +1418,8 @@ public class StormRenderer : MonoBehaviour
 			}
 			double num7 = Math.Exp(0.0 - WeatherSystem.Pow2(Math.Max(0.0, num3 - (0.7 + 0.9 * num4)) / 3.4));
 			double num8 = Mathf.Clamp01(puff.life / 4f) * Mathf.Clamp01((puff.maxLife - puff.life) / 4f);
-			double num9 = (double)puff.baseAlpha * num6 * num7 * num8 * (double)num * (double)s.MergeFade()   // v2.0.51 — 合并渐隐
-				* (double)spawnAnimT * (1.0 - 0.5 * s.TransitionBlend()) * (double)dissolveFade;   // v2.0.98 生成/转变过渡；v2.2.6 消散渐隐
+			double num9 = (double)puff.baseAlpha * num6 * num7 * num8 * (double)num * (double)mergeFade   // v2.0.51 — 合并渐隐
+				* (double)spawnAnimT * (1.0 - 0.5 * transBlend) * (double)dissolveFade;   // v2.0.98 生成/转变过渡；v2.2.6 消散渐隐
 			// v2.4.5 — 云底侵蚀（消散产物#2，对流系统通用）：消散期（energy 20→0）云底先
 			// 透明、顶部砧云后散——"从下往上散"的对流消散签名（超单/单体/MCS 的砧云残留
 			// 是现实消散最标志性的视觉）。erode=Clamp01((20-energy)/20)、
@@ -1614,9 +1620,9 @@ public class StormRenderer : MonoBehaviour
 						coreCol = new Color(0.75f, 0.70f, 0.60f);
 					}
 					float ropeFade = ropeOut ? (0.4f + 0.6f * (float)t) : 1f;
-					float aWall = 0.95f * (0.52f + 0.55f * (float)t) * (0.4f + 0.6f * (float)grow) * S.MergeFade() * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.4.1 rope-out 底部先透
+					float aWall = 0.95f * (0.52f + 0.55f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.4.1 rope-out 底部先透
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, halfW, halfW, Vector2.right, new Color(wallCol.r, wallCol.g, wallCol.b, aWall), 0f);
-					float aCore = 0.32f * (0.5f + 0.5f * (float)t) * (0.4f + 0.6f * (float)grow) * S.MergeFade() * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.2 生成动画
+					float aCore = 0.32f * (0.5f + 0.5f * (float)t) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * ropeFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐；v2.2 生成动画
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, halfC, halfC, Vector2.right, new Color(coreCol.r, coreCol.g, coreCol.b, aCore), 0f);
 				}
 				// v2.4.4 — 多涡旋（5）/卫星龙卷（6）子涡：主漏斗外附加 2/1 个小漏斗绕转。
@@ -1648,7 +1654,7 @@ public class StormRenderer : MonoBehaviour
 								qc2 = (cen2 - alignOrigin) * (farAbsS / 10000f);
 								rr2 *= farAbsS / 10000f;
 							}
-							float aW2 = 0.6f * (0.4f + 0.6f * (float)t2) * (0.4f + 0.6f * (float)grow) * S.MergeFade() * dissolveFade * spawnAnimT;   // v2.2（fix-checker ⚠️-3）子涡补乘 spawnAnimT
+							float aW2 = 0.6f * (0.4f + 0.6f * (float)t2) * (0.4f + 0.6f * (float)grow) * mergeFade * dissolveFade * spawnAnimT;   // v2.2（fix-checker ⚠️-3）子涡补乘 spawnAnimT
 							WriteQuad(A.bV, A.bT, A.bC, num2++, qc2, (float)rr2, (float)rr2, Vector2.right, new Color(0.66f, 0.70f, 0.84f, aW2), 0f);
 						}
 					}
@@ -1695,7 +1701,7 @@ public class StormRenderer : MonoBehaviour
 					// v2.0.38 — 提亮：灰屏（近距风暴变灰后处理）下原土棕(0.6,0.55,0.48)会被拉成
 					// 和背景一样的灰暗 → 卷尘环改用更亮更暖的亮尘色(0.82,0.74,0.62) + alpha 提升，
 					// 即使在轻微灰化下触地尘环依然醒目。
-					float a = 0.72f * (0.4f + 0.6f * (float)grow) * (0.55f + 0.45f * (float)Math.Abs(Math.Sin(S.age * 3.0 + (double)d))) * S.MergeFade() * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.72f * (0.4f + 0.6f * (float)grow) * (0.55f + 0.45f * (float)Math.Abs(Math.Sin(S.age * 3.0 + (double)d))) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.82f, 0.74f, 0.62f, a), 0f);
 				}
 			}
@@ -1738,7 +1744,7 @@ public class StormRenderer : MonoBehaviour
 						qc = (cen - alignOrigin) * (farAbsS / 10000f);
 						half = half * farAbsS / 10000f;
 					}
-					float a = 0.85f * (0.5f + 0.5f * (float)grow) * (1f - 0.35f * (float)uu) * S.MergeFade() * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.85f * (0.5f + 0.5f * (float)grow) * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.88f, 0.93f, 1f, a), 0f);
 				}
 			}
@@ -1780,7 +1786,7 @@ public class StormRenderer : MonoBehaviour
 						qc = (cen - alignOrigin) * (farAbsS / 10000f);
 						half = half * farAbsS / 10000f;
 					}
-					float a = 0.85f * (float)grow * (1f - 0.35f * (float)uu) * S.MergeFade() * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+					float a = 0.85f * (float)grow * (1f - 0.35f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
 					WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.66f, 0.52f, 0.36f, a), 0f);
 				}
 			}
@@ -1843,7 +1849,7 @@ public class StormRenderer : MonoBehaviour
 				// 触地扩散后渐隐到 0（碰地面往旁边冲，逐渐变透明，把自己删了）。
 				float born = Mathf.Clamp01((float)(tt / 0.12));
 				float fade = 1f - (float)spread;
-				float a = 0.9f * (float)fx.strength * (float)ph2 * born * (0.25f + 0.75f * fade) * S.MergeFade() * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
+				float a = 0.9f * (float)fx.strength * (float)ph2 * born * (0.25f + 0.75f * fade) * mergeFade * dissolveFade * spawnAnimT;   // v2.0.51 合并渐隐；v2.2.6 消散渐隐
 				if (a < 0.02f)
 				{
 					continue;   // 已淡出 = 已删除
@@ -1905,7 +1911,7 @@ public class StormRenderer : MonoBehaviour
 					Vector2 axis = (tL - bL).normalized;
 					float halfY = (float)(S.Rmax * wallHalfY * grow);
 					float halfX = (float)(S.Rmax * 0.11);
-					float wa = 0.75f * (float)grow * S.MergeFade() * (1f - Mathf.Abs(ai) * 0.1f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
+					float wa = 0.75f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.1f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
 					if (farAbs)
 					{
 						qc = (cenL - alignOrigin) * (farAbsS / 10000f);
@@ -1920,7 +1926,7 @@ public class StormRenderer : MonoBehaviour
 					Vector2 qc2 = align ? (bL - alignOrigin) : bL;
 					float hx2 = (float)(S.Rmax * 0.22);
 					float hy2 = (float)(S.Rmax * dustH);
-					float da = 0.5f * (float)grow * S.MergeFade() * (1f - Mathf.Abs(ai) * 0.12f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
+					float da = 0.5f * (float)grow * mergeFade * (1f - Mathf.Abs(ai) * 0.12f) * dissolveFade * spawnAnimT;   // v2.2.6 消散渐隐；v2.2 生成动画
 					if (farAbs)
 					{
 						qc2 = (bL - alignOrigin) * (farAbsS / 10000f);

@@ -460,30 +460,30 @@ public class WeatherSystem
 	private double cC7b;
 	private double cC10;
 	private double cC12;
-	private long cFinger;
+	// v2.4.6 — 风圈脏标记：原每风采样重算指纹（~30 次整数运算 + 11 次数组读取 × 每帧
+	// 数千次粒子采样 = 每帧几十万次冗余运算）。改参数写点（vmaxDisplay/intensity/
+	// Rmax/Router/category/type 变化处）置 dirty，采样时仅 O(1) 检查 flag → 风圈每帧
+	// 最多重算一次。行为等价（同帧参数不变则结果完全相同）。
+	private bool cWindDirty = true;
 
-	// v2.1.1 — 缓存刷新：指纹变化才重算 4 个风圈（任何相关参数变化即失效）。
+	// v2.1.1 — 缓存刷新：参数写点标记后重算 4 个风圈（无参变化时零开销）。
 	private void RefreshWindCircles()
 	{
-		unchecked
+		if (!cWindDirty)
 		{
-			long f = (long)(vmaxDisplay * 1000.0) * 1000003L + (long)(intensity * 1000.0) * 97L
-				+ (long)(Rmax * 1000.0) * 31L + (long)(Router * 1000.0) * 17L
-				+ category * 7L + (long)type * 1009L;
-			for (int i = 0; i < 11; i++)
-			{
-				f = f * 31L + (long)(StormRenderer.windZoneGain[i] * 100.0);
-			}
-			if (f == cFinger)
-			{
-				return;
-			}
-			cFinger = f;
-			cC7 = WindCircleRo(13.9);
-			cC7b = WindCircleRo(13.9, true);
-			cC10 = WindCircleRo(24.5, true);
-			cC12 = WindCircleRo(32.7, true);
+			return;
 		}
+		cWindDirty = false;
+		cC7 = WindCircleRo(13.9);
+		cC7b = WindCircleRo(13.9, true);
+		cC10 = WindCircleRo(24.5, true);
+		cC12 = WindCircleRo(32.7, true);
+	}
+
+	// v2.4.6 — 风圈缓存失效标记（Rmax/Router/vmaxDisplay/intensity/category/type 写点调用）。
+	public void MarkWindCirclesDirty()
+	{
+		cWindDirty = true;
 	}
 
 	// v2.1.1 — 缓存版风圈（HUD/黑框调用）：13.9/24.5/32.7 命中缓存，其他 levelMin 回落直接计算。
@@ -947,6 +947,7 @@ public class WeatherSystem
 		vmaxTargetBase = Vmax;   // v2.3.6 — 档位基准（能量驱动风速的乘数基准）
 		wmaxDisplay = Wmax;
 		naturalProgress = 0.0;
+		cWindDirty = true;   // v2.4.6 — 初始参数已定，风圈缓存需按新参数重算
 	}
 
 	// v2.0.98 — 手动/自然设置强度档（F8 或自然升级共用）：只改目标值，实际风场由
@@ -964,6 +965,7 @@ public class WeatherSystem
 		vmaxTargetBase = Spec[(int)type].vmaxMs * catF * cVnow;
 		vmaxTarget = vmaxTargetBase;
 		SyncFxStrength();
+		cWindDirty = true;   // v2.4.6 — category 变化 → 风圈缓存失效
 	}
 
 	// v2.4.3 — 待办5 🟡-8：眼壁实际风速（风场 windZoneGain 眼壁区 1.2 增强的物理峰值），
@@ -1069,6 +1071,7 @@ public class WeatherSystem
 		SetCategory(category);
 		Vmax = vmaxTargetBase;
 		vmaxBase = vmaxTarget;
+		cWindDirty = true;   // v2.4.6 — 类型转变重配尺度后风圈缓存失效
 	}
 
 	public void Advance(double dt)
@@ -1148,6 +1151,7 @@ public class WeatherSystem
 			}
 			TypeSpec sp = Spec[(int)type];
 			wmaxDisplay = vmaxDisplay * sp.updraft;
+			cWindDirty = true;   // v2.4.6 — vmaxDisplay 变化 → 风圈缓存失效
 		}
 		// v2.0.98 — 类型转变推进：3 秒过渡完成后切类型并重配尺度（粒子在原基础上转变）。
 		if (transitionAnimT >= 0.0)
@@ -1159,6 +1163,7 @@ public class WeatherSystem
 				transitionAnimT = -1.0;
 				ApplyTypeScale();
 				RebuildPuffsFlag = true;   // 通知渲染端按新类型重建粒子分布
+				cWindDirty = true;   // v2.4.6 — 类型变化 → 风圈缓存失效
 			}
 		}
 		// v2.0.51 — 合并动画推进（0→1，3 秒）；到 1 由 Manager 移除被吞方/重置状态。
@@ -1300,11 +1305,13 @@ public class WeatherSystem
 				energy = Math.Min(100.0, energy + developRate * envF * effDt);
 			}
 			intensity = 0.4 + 0.6 * Clamp01((energy - 55.0) / 25.0);
+			cWindDirty = true;   // v2.4.6 — intensity 变化 → 风圈缓存失效
 		}
 		else if (stage == 1)
 		{
 			energy = Math.Max(30.0, energy - netPerSec * effDt);   // 成熟高位缓慢下降
 			intensity = 1.0;
+			cWindDirty = true;   // v2.4.6 — intensity 变化 → 风圈缓存失效
 			// v2.4.3 — EWRC 眼壁置换（land decay 优先：登陆取消；海上成熟强台风触发）：
 			// 每 10 分钟概率进入一个 3 分钟置换周期——先降 20% 风速/能量（眼糊），
 			// 复强段略超置换前（×1.05 并回补能量）。渲染眼清晰度/眼径自动跟随。
@@ -1395,6 +1402,7 @@ public class WeatherSystem
 			}
 			energy = Math.Max(0.0, energy - dr * effDt);
 			intensity = 1.0 - 0.8 * Clamp01((30.0 - energy) / 30.0);
+			cWindDirty = true;   // v2.4.6 — intensity 变化 → 风圈缓存失效
 			double eFrac2 = Clamp01((energy - 30.0) / 50.0);
 			vmaxTarget = Math.Max(vmaxBase * 0.35, vmaxTargetBase * (0.7 + 0.3 * eFrac2));
 		}

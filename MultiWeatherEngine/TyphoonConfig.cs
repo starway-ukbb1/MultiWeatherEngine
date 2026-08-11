@@ -50,6 +50,10 @@ public class TyphoonConfig
 	// v2.2.1 — 地图标记（M 地图视图显示风暴点+标签）：
 	public bool mapMarkers = true;
 
+	// v2.2.1 — 天气音效（程序化合成雷声/风声/雨声，无需音频文件）：
+	public bool weatherAudio = true;        // 音效总开关
+	public float weatherVolume = 0.8f;      // 音效音量 0-1
+
 	public int canopyPuffs = 1500;
 
 	public int cloudPuffs = 1100;

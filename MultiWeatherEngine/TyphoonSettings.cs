@@ -73,6 +73,41 @@ public static class TyphoonSettings
 		};
 	}
 
+	// v2.2.1 fix2 — 带 min/max 范围约束的 NumRow（NumberInput 无内置范围限制，
+	// 用户可输入负数/超大值）。回写 ni.Value 会递归触发 OnValueChangedEvent（setter
+	// 无条件调 OnValueChanged → 爆栈），用 updating 标志防重入：回写时跳过回调，
+	// 回写完毕再手动 set + Save。
+	private static void ClampedNumRow(Box box, int w, string name, double value, float step, float min, float max, Action<float> set)
+	{
+		Builder.CreateLabel(box, w - 200, 30, 0, 0, name);
+		NumberInput ni = UIToolsBuilder.CreateNumberInput(box, 200, 30, Mathf.Clamp((float)value, min, max), step);
+		bool updating = false;
+		ni.OnValueChangedEvent += delegate (float v)
+		{
+			if (updating)
+			{
+				return;
+			}
+			try
+			{
+				float clamped = Mathf.Clamp(v, min, max);
+				if (Mathf.Abs(clamped - v) > 0.0001f)
+				{
+					// 输入越界 → 回写显示为钳位后的值（用户看到 -5 → 自动变 0）
+					updating = true;
+					ni.Value = clamped;
+					updating = false;
+				}
+				set(clamped);
+				TyphoonConfig.Save();
+			}
+			catch (Exception ex)
+			{
+				Debug.LogWarning("[Typhoon] 设置项写入失败 " + name + ": " + ex.Message);
+			}
+		};
+	}
+
 	private static void ToggleRow(Box box, int w, string name, Func<bool> get, Action<bool> set)
 	{
 		Button b = Builder.CreateButton(box, w, 34, 0, 0, null, name + ": " + (get() ? "开" : "关"));
@@ -96,6 +131,12 @@ public static class TyphoonSettings
 		ToggleRow(box, w, "地图标记风暴", () => TyphoonConfig.I.mapMarkers, delegate (bool v) { TyphoonConfig.I.mapMarkers = v; });
 		ToggleRow(box, w, "风暴视觉效果", () => TyphoonConfig.I.visuals, delegate (bool v) { TyphoonConfig.I.visuals = v; });
 		ToggleRow(box, w, "闪电", () => TyphoonConfig.I.lightning, delegate (bool v) { TyphoonConfig.I.lightning = v; });
+		// v2.2.1 — 天气音效（程序化合成，无音频文件）
+		Section(box, w, "音效");
+		ToggleRow(box, w, "天气音效", () => TyphoonConfig.I.weatherAudio, delegate (bool v) { TyphoonConfig.I.weatherAudio = v; });
+		// v2.2.1 fix2 — ClampedNumRow 0-1：原 NumRow 无范围约束，可输入负数（内部 Clamp01
+		// 到 0 → 静音，但 UI 仍显示负数 → 用户以为"音量没生效"）。ClampedNumRow 回写钳位值。
+		ClampedNumRow(box, w, "音量 (0-1)", TyphoonConfig.I.weatherVolume, 0.05f, 0f, 1f, delegate (float v) { TyphoonConfig.I.weatherVolume = v; });
 		Section(box, w, "相机");
 		ToggleRow(box, w, "相机抖动", () => TyphoonConfig.I.cameraShake, delegate (bool v) { TyphoonConfig.I.cameraShake = v; });
 		NumRow(box, w, "抖动强度 (0-3)", TyphoonConfig.I.cameraShakeScale, 0.1f, delegate (float v) { TyphoonConfig.I.cameraShakeScale = Mathf.Clamp(v, 0f, 3f); });
