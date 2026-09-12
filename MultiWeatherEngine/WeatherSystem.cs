@@ -56,7 +56,13 @@ public class WeatherSystem
 		public double aspectMin;   // 高宽比下限（Rmax ≥ Htop×aspectMin，防 SFS 大气厚导致细长柱）
 		public double vmaxMs;      // 基准峰值风速（m/s，非台风 category=3 时；台风仅作归一化基准 = PeakWind[5] CAT-4）— （终审🟡-15）注释修正：62 在 PeakWind 表是索引 5（CAT-4）非 category 3
 		public double updraft;     // 垂直速度系数（Wmax = Vmax × updraft）
-		public double lifetimeSec; // 生命史（秒；台风 0 = 不自然消散）
+		// 三阶段时长（游戏秒，现实口径）——结构整理：原实现把这三组数（发育 25 能量 /
+		// 成熟 50 能量 / 消散 30 能量各自的速率）以三条 if-else 链硬编码在 Advance 内，
+		// 与 Spec 表重复且容易失配。现在表是唯一真源，Advance 直接读（数值完全等价）。
+		// developSec：energy 55→80；matureSec：80→30（净耗散）；dissolveSec：30→0。
+		public double developSec;
+		public double matureSec;
+		public double dissolveSec;
 		public double rotate;      // 旋转强度 0-1（超级单体中气旋）
 		public double downburst;   // 下沉/出流强度 0-1（成熟期下击暴流倾向）
 		public double line;        // 线状强度 0-1（飑线）
@@ -79,26 +85,114 @@ public class WeatherSystem
 	// 现在索引 = (int)StormType 严格一致：Typhoon=0 Cell=1 Multicell=2 Supercell=3 SquallLine=4 MCS=5 DustStorm=6。
 	public static readonly TypeSpec[] Spec = new TypeSpec[7]
 	{
-		// 云底（现实 AGL → SFS ×0.3）：台风眼壁对流 ~600m、单体/多单体/飑线/MCS
-		// 雷暴云底典型 1000-1500m、经典超级单体 LCL ~1000m（HP 更低 LP 更高）。
-		new TypeSpec { name = "台风",        rmaxFrac = 0.0079, htopFrac = 0.15, hbaseM = 600,  aspectMin = 0.45, vmaxMs = 62, updraft = 0.32, lifetimeSec = 432000, rotate = 1.0,  downburst = 0.0,  line = 0.0,  gustFront = 0.0,  tornadoHost = false, defaultCat = 4, maxCat = 6, naturalUpTimeSec = 43200, desc = "热带气旋，最大天气系统" },   // maxCat 6（萨菲尔全表 0-6）；升级 12h/级（现实）
-		new TypeSpec { name = "单体",        rmaxFrac = 0.0006,  htopFrac = 0.10, hbaseM = 1200, aspectMin = 0.40, vmaxMs = 18, updraft = 0.50, lifetimeSec = 2700,  rotate = 0.0,  downburst = 0.0, line = 0.0,  gustFront = 0.20, tornadoHost = false, defaultCat = 1, maxCat = 1, naturalUpTimeSec = 0, desc = "普通单体雷暴：发育20+成熟45+消散20≈85min（能量制实际）" },   // maxCat 1（现实无等级概念，永不升级）；（终审🟢-5）注释改能量制实际总时长
-		new TypeSpec { name = "多单体",      rmaxFrac = 0.0013,  htopFrac = 0.11, hbaseM = 1200, aspectMin = 0.40, vmaxMs = 25, updraft = 0.50, lifetimeSec = 28800, rotate = 0.10, downburst = 0.0, line = 0.0,  gustFront = 0.30, tornadoHost = false, defaultCat = 2, maxCat = 2, naturalUpTimeSec = 0, desc = "多单体风暴：团状，新生单体更替，2-6h" },   // maxCat 2
-		new TypeSpec { name = "超级单体",    rmaxFrac = 0.0019,  htopFrac = 0.12, hbaseM = 1000, aspectMin = 0.50, vmaxMs = 38, updraft = 0.55, lifetimeSec = 28800, rotate = 0.85, downburst = 0.30, line = 0.0,  gustFront = 0.40, tornadoHost = true,  defaultCat = 4, maxCat = 4, naturalUpTimeSec = 0, desc = "超级单体：深厚中气旋，可产龙卷" },   // maxCat 4
-		new TypeSpec { name = "飑线",        rmaxFrac = 0.0031,  htopFrac = 0.12, hbaseM = 1200, aspectMin = 0.40, vmaxMs = 32, updraft = 0.50, lifetimeSec = 64800, rotate = 0.10, downburst = 0.40, line = 0.85, gustFront = 0.95, tornadoHost = true,  defaultCat = 3, maxCat = 4, naturalUpTimeSec = 12960, desc = "飑线：线状+弓形+阵风锋，可产龙卷" },   // maxCat 4；升级 3.6h/级
-		new TypeSpec { name = "中尺度对流系统", rmaxFrac = 0.0065, htopFrac = 0.13, hbaseM = 1200, aspectMin = 0.50, vmaxMs = 30, updraft = 0.50, lifetimeSec = 64800, rotate = 0.30, downburst = 0.30, line = 0.50, gustFront = 0.75, tornadoHost = true,  defaultCat = 4, maxCat = 4, naturalUpTimeSec = 0, desc = "MCS：大尺度，含弓形飑线+多涡旋" },   // maxCat 4
+		// 现实标定速查（三阶段时长 = energy 55→80 / 80→30 / 30→0 的游戏秒）：
+		// 台风 2.5d/5d/12h（现实生命史 5-9 天 ✓）、单体 20min/45min/20min（现实 30-60min ✓）、
+		// 多单体 1.5h/8h/3h、超级单体 1.5h/8h/2h（现实 2-6h，8h 取上界）、
+		// 飑线 3h/18h/6h（现实 6-12h，长寿命线状对流可达 24h）、MCS 3h/18h/6h、
+		// 沙尘暴 4h/24h/8h（局地 Haboob 数十分钟、大范围沙尘暴 1-3 天）。
+		new TypeSpec
+		{
+			name = "台风", rmaxFrac = 0.0079, htopFrac = 0.15, hbaseM = 600, aspectMin = 0.45,
+			vmaxMs = 62, updraft = 0.32, developSec = 216000, matureSec = 432000, dissolveSec = 43200,
+			rotate = 1.0, downburst = 0.0, line = 0.0, gustFront = 0.0,
+			tornadoHost = false, defaultCat = 4, maxCat = 6, naturalUpTimeSec = 43200,
+			desc = "热带气旋，最大天气系统"
+		},   // maxCat 6（萨菲尔全表 0-6）；升级 12h/级（现实）；Rmax 现实 50km、云顶 15km
+		// 风速口径修正（现实性审计）：非台风类型的实际峰值 = vmaxMs×(0.5+cat/6)，普通单体
+		// maxCat=1 → 只有 0.667 档。原 vmaxMs=18 → 实际阵风仅 12 m/s（6 级），而现实普通
+		// 雷暴地面阵风 15-25 m/s；多单体 25 → 实际 20.8 m/s，现实 25-35 m/s。把 vmaxMs
+		// 抬到"典型档落进现实区间"：单体 27→实际 18 m/s、多单体 36→实际 30 m/s。
+		new TypeSpec
+		{
+			name = "单体", rmaxFrac = 0.0006, htopFrac = 0.10, hbaseM = 1200, aspectMin = 0.40,
+			vmaxMs = 27, updraft = 0.50, developSec = 1200, matureSec = 2700, dissolveSec = 1200,
+			rotate = 0.0, downburst = 0.0, line = 0.0, gustFront = 0.20,
+			tornadoHost = false, defaultCat = 1, maxCat = 1, naturalUpTimeSec = 0,
+			desc = "普通单体雷暴：发育20+成熟45+消散20≈85min（能量制实际）"
+		},   // maxCat 1（现实无等级概念，永不升级）
+		new TypeSpec
+		{
+			name = "多单体", rmaxFrac = 0.0013, htopFrac = 0.11, hbaseM = 1200, aspectMin = 0.40,
+			vmaxMs = 36, updraft = 0.50, developSec = 5400, matureSec = 28800, dissolveSec = 10800,
+			rotate = 0.10, downburst = 0.0, line = 0.0, gustFront = 0.30,
+			tornadoHost = false, defaultCat = 2, maxCat = 2, naturalUpTimeSec = 0,
+			desc = "多单体风暴：团状，新生单体更替，2-6h"
+		},   // maxCat 2
+		new TypeSpec
+		{
+			name = "超级单体", rmaxFrac = 0.0019, htopFrac = 0.12, hbaseM = 1000, aspectMin = 0.50,
+			vmaxMs = 38, updraft = 0.55, developSec = 5400, matureSec = 28800, dissolveSec = 7200,
+			rotate = 0.85, downburst = 0.30, line = 0.0, gustFront = 0.40,
+			tornadoHost = true, defaultCat = 4, maxCat = 4, naturalUpTimeSec = 0,
+			desc = "超级单体：深厚中气旋，可产龙卷"
+		},   // maxCat 4
+		new TypeSpec
+		{
+			name = "飑线", rmaxFrac = 0.0031, htopFrac = 0.12, hbaseM = 1200, aspectMin = 0.40,
+			vmaxMs = 32, updraft = 0.50, developSec = 10800, matureSec = 64800, dissolveSec = 21600,
+			rotate = 0.10, downburst = 0.40, line = 0.85, gustFront = 0.95,
+			tornadoHost = true, defaultCat = 3, maxCat = 4, naturalUpTimeSec = 12960,
+			desc = "飑线：线状+弓形+阵风锋，可产龙卷"
+		},   // maxCat 4；升级 3.6h/级
+		new TypeSpec
+		{
+			name = "中尺度对流系统", rmaxFrac = 0.0065, htopFrac = 0.13, hbaseM = 1200, aspectMin = 0.50,
+			vmaxMs = 30, updraft = 0.50, developSec = 10800, matureSec = 64800, dissolveSec = 21600,
+			rotate = 0.30, downburst = 0.30, line = 0.50, gustFront = 0.75,
+			tornadoHost = true, defaultCat = 4, maxCat = 4, naturalUpTimeSec = 0,
+			desc = "MCS：大尺度，含弓形飑线+多涡旋"
+		},   // maxCat 4
 		// 沙尘暴（独立天气系统，用户：沙尘暴应该是独立系统才对）：蒙古气旋/冷锋
 		// 驱动的干旱区沙尘暴（2021 亚洲大范围沙尘暴等）不依赖雷暴。参数基于气象调研：
 		// 局地 Haboob 10-100km、大尺度 100-1000km；沙尘顶 1-5km、强水平风 20-40 m/s、
-		// 寿命 6-8h、贴地沙层（无云底概念）、可带弱涡旋（蒙古气旋）。无降雨/闪电/龙卷。
+		// 贴地沙层（无云底概念）、可带弱涡旋（蒙古气旋）。无降雨/闪电/龙卷。
 		// 尺度 0.02→0.006（用户：沙尘暴似乎太大）：原 38km 贴地低层铺天盖地，
 		// 砍到 ~11.5km（介于 MCS 8.4km 与台风 15km 之间，符合常见 Haboob 规模）。
-		new TypeSpec { name = "沙尘暴",      rmaxFrac = 0.006,  htopFrac = 0.08, hbaseM = 100,  aspectMin = 2.0,  vmaxMs = 28, updraft = 0.15, lifetimeSec = 86400, rotate = 0.25, downburst = 0.0, line = 0.4,  gustFront = 0.80, tornadoHost = false, defaultCat = 2, maxCat = 4, naturalUpTimeSec = 17280, desc = "沙墙推进（Haboob），无降雨" }   // maxCat 4（GB/T 国标 5 档）；升级 4.8h/级
+		// htopFrac 0.08→0.04（现实性审计）：原 8km 云顶远超自身调研的"沙尘顶 1-5km"
+		// （8km 已是深对流砧云高度，沙尘无法被带到那里）→ 4km 现实上限。
+		new TypeSpec
+		{
+			name = "沙尘暴", rmaxFrac = 0.006, htopFrac = 0.04, hbaseM = 100, aspectMin = 2.0,
+			vmaxMs = 28, updraft = 0.15, developSec = 14400, matureSec = 86400, dissolveSec = 28800,
+			rotate = 0.25, downburst = 0.0, line = 0.4, gustFront = 0.80,
+			tornadoHost = false, defaultCat = 2, maxCat = 4, naturalUpTimeSec = 17280,
+			desc = "沙墙推进（Haboob），无降雨"
+		}   // maxCat 4（GB/T 国标 5 档）；升级 4.8h/级
 	};
 
 	public static string TypeName(StormType t)
 	{
 		return Spec[(int)t].name;
+	}
+
+	// 龙卷类型名（FxInst.variant 0-7，与 StormRenderer 的渲染分支一一对应）：
+	// 供 HUD/雷达/指挥中心显示"这是什么龙卷"（预报文案用）。
+	public static string TornadoVariantName(int v)
+	{
+		switch (v)
+		{
+		case 1: return "楔形";
+		case 2: return "绳状";
+		case 3: return "水龙卷";
+		case 4: return "陆龙卷";
+		case 5: return "多涡旋";
+		case 6: return "卫星龙卷";
+		case 7: return "阵风旋";
+		default: return "标准";
+		}
+	}
+
+	// 龙卷强度 → 增强藤田级（EF0-EF5，美国 NWS 风速阈值，m/s）：
+	// EF0 29-38 / EF1 38-49 / EF2 49-60 / EF3 60-74 / EF4 74-89 / EF5 ≥89。
+	// 风速口径取母体眼壁风（与渲染端的漏斗尺度同源），低于 EF0 阈值记 EF0。
+	public static int EfFromWind(double windMs)
+	{
+		if (windMs >= 89.4) return 5;
+		if (windMs >= 74.0) return 4;
+		if (windMs >= 60.0) return 3;
+		if (windMs >= 49.0) return 2;
+		if (windMs >= 38.0) return 1;
+		return 0;
 	}
 
 	// 等级名按类型：台风用萨菲尔辛普森（TD/TS/CAT-1~5），
@@ -133,9 +227,13 @@ public class WeatherSystem
 			}
 			return "特强沙尘暴";
 		}
-		string[] g = { "微弱", "弱", "中等", "较强", "强", "很强", "极端" };
-		return g[Category.Clamp(cat)];
+		return genericGradeNames[Category.Clamp(cat)];
 	}
+
+	// 通用强度档名（提到静态字段：原实现在 StrengthName 里写局部 `string[] g = {...}`，
+	// 每次调用都新建一个 7 元素数组 —— HUD 每帧为每行系统 + 雷达 + 菜单各调一次，
+	// 是纯热路径分配）。
+	private static readonly string[] genericGradeNames = { "微弱", "弱", "中等", "较强", "强", "很强", "极端" };
 
 	// 台风眼壁半径（Rmax 比例，渲染+风场共用）：按强度分级贴近现实——
 	// cat0/1(TD/TS) 无清晰眼（0）、cat2(STS) 朦胧眼 0.22、cat3(C1) 0.30、cat4(C2) 0.36、
@@ -165,6 +263,27 @@ public class WeatherSystem
 		return 0.40;
 	}
 
+	// 被云/雨包裹时的基准水平能见度（米），逐型对标现实（暴雨内 <1km）。
+	// 现实参考：雷暴/超级单体暴雨 ~0.5-1km；飑线/台风雨带 ~1-2km；MCS 混合层状 ~1.5-3km；
+	// 沙尘暴由 GB/T 20480 按强度另算（此处返回 -1 走 DustFactor）。等级越高雨越强、
+	// 能见度越低（最高档 ×0.6）。
+	public static double BaseVisM(StormType t, int cat)
+	{
+		double baseM;
+		switch (t)
+		{
+			case StormType.Typhoon:    baseM = 1200.0; break;   // 雨带暴雨 ~1-2km（外缘略清）
+			case StormType.Cell:       baseM = 800.0;  break;   // 单体雷暴暴雨 <1km
+			case StormType.Multicell:  baseM = 900.0;  break;
+			case StormType.Supercell:  baseM = 800.0;  break;   // 暴雨+冰雹 <1km
+			case StormType.SquallLine: baseM = 1000.0; break;   // 飑线暴雨 ~1km
+			case StormType.MCS:        baseM = 1500.0; break;   // 层状+对流混合 ~1.5-3km
+			case StormType.DustStorm:  return -1.0;             // 走 DustFactor
+			default:                   baseM = 1000.0; break;
+		}
+		return baseM * (1.0 - 0.4 * ((double)Category.Clamp(cat) / 6.0));
+	}
+
 	// ===== 实例 =====
 	public StormType type = StormType.Cell;
 	public Planet planet;
@@ -187,7 +306,9 @@ public class WeatherSystem
 	public int atmoClass;
 	public double rotateScale = 1.0;  // 巨行星反气旋强化（中气旋旋转 ×1.5）
 	public double age;
-	public double lifetime;           // 秒；0 = 持续（台风）（ 能量制后死字段，仅存档）
+	// 结构整理：lifetime/lifetimeSec 死字段已删（能量制后不参与任何判定）。
+	// 注：其赋值 `spec.lifetimeSec * (0.8 + 0.4*(double)seed*0.5 + 0.4*0.5)` 还有量级 bug
+	// （seed 到 100000 → 乘子上万倍），因字段从未被读取而无害；随字段一并移除。
 	// developTime/dissolveTime 死字段已删（ 能量制后不参与判定，
 	// 发展/消散时长由 developRate/dissolveRate 类型表驱动）
 	public int stage;                 // 0 发展 1 成熟 2 消散
@@ -295,15 +416,150 @@ public class WeatherSystem
 	// 地形类型（沙漠/绿地/冰/岩/海）：随海陆检测一起节流采样。
 	public TerrainKind terrainKind = TerrainKind.Ocean;
 	// 形成动画相位 0→1（约 3 秒成型）：漏斗从云底缓缓垂到地面、粒子逐渐增强。
-	public double phaseTornado;
-	public double phaseDownburst;
+	// 结构整理：phaseTornado/phaseDownburst（只写不读的兼容镜像，渲染端统一读 fx.phase）
+	// 与 tornadoLevel（被 0.5+category/6 取代）已删除。
 	// 消散状态：ClearPhenomena 置 true 后强度以 ~3 秒速度衰减（消散动画），
 	// 渲染端 grow = min(phase, strength) 让漏斗反向缩回云底。
 	public bool dissolvingTornado;
 	public bool dissolvingDownburst;
-	// 龙卷强度档 1-5（默认 3）：tornadoStrength = level/3.0（0.33~1.67），
-	// 直接缩放风场（吸力 130×0.42×strength）与渲染（grow 上限）。Shift+F8 循环调节。
-	public int tornadoLevel = 3;
+	// 附属现象现实配额（现实性审计）：本风暴一生可产生的现象个数；0 = 不产，
+	// -1 = 无限（phenomenaRealism 关闭时退回旧连续生成）。逐次消耗，用尽即不再生成。
+	public int tornadoQuota;
+	public int downburstQuota;
+	public int gustFrontQuota;
+	// 登陆摩擦风速乘子（持久化 0.3-1.0）：台风登陆后风速按地形粗糙度持续衰减，
+	// 回到海上缓慢恢复。原实现每帧只乘一次、立刻被档位公式覆盖 → 从未累积（潜伏 bug）。
+	private double landWindK = 1.0;
+
+	// ===== 风暴卷起的障碍物（树木 / 石头）：被风刮起 → 飞行翻滚 → 可撞击火箭 =====
+	// 用户点出的机制：游戏自带"火箭被撞即毁"（DestructionReason.RocketCollision +
+	// TerrainCollision），只要风暴能把地面物体刮起来，撞击后的解体和失败菜单全由游戏
+	// 原生处理。游戏里没有原生树/石对象（只有职业树的 UI），所以由本 mod 造：
+	// 自研质点模拟（重力 + 气动阻力 + 风暴风场）+ 复用渲染层画 quad，不碰 Unity 物理层
+	// （SFS 地形碰撞不是标准 Collider2D，自己算落点更稳）。
+	public class DebrisInst
+	{
+		public double s;        // 切向位置（相对风暴中心，米；与风场同一坐标）
+		public double h;        // 高度 AGL（米）
+		public double vs;       // 切向速度（m/s）
+		public double vh;       // 垂直速度（m/s）
+		public double size;     // 特征尺寸（米；石头半径 / 树高的一半）
+		public double mass;     // 质量（kg）
+		public double spin;     // 渲染自转角（弧度）
+		public double spinV;    // 自转角速度
+		public int kind;        // 0 = 石头，1 = 树
+		public bool airborne;   // 已离地（离地后走飞行模拟，落地重新锚定）
+		public double age;
+	}
+	public List<DebrisInst> debris = new List<DebrisInst>();
+	private double lastDebrisSpawn = -999.0;
+	// 本帧是否有 debris 处于"高速贴地/飞行"状态（HUD 危险提示用）。
+	public bool debrisActive;
+
+	// 环境阻力参数（现实值）：空气密度 ρ、阻力系数 Cd（石头钝体 1.2 / 树 1.5 带枝叶）。
+	private const double DebrisRho = 1.225;
+	private const double DebrisG = 9.81;
+	// 起扬阈值：地面风 < 12 m/s（6 级）刮不动石块、树要 15 m/s。
+	private const double DebrisLiftRock = 12.0;
+	private const double DebrisLiftTree = 15.0;
+
+	// 卷起/推进障碍物（每帧；spawn 节流）。dt = 游戏秒。
+	private void AdvanceDebris(double dt)
+	{
+		int maxN = TyphoonConfig.I.stormDebris ? Math.Max(0, TyphoonConfig.I.debrisMaxPerStorm) : 0;
+		debrisActive = false;
+		// 生成：成熟期、陆地（树木只在绿地）、风够大、节流 2 游戏秒
+		if (maxN > 0 && stage >= 1 && debris.Count < maxN && terrainKind != TerrainKind.Ocean
+			&& vmaxDisplay > 22.0 && age - lastDebrisSpawn > 2.0)
+		{
+			lastDebrisSpawn = age;
+			DebrisInst d = new DebrisInst();
+			bool canTree = terrainKind == TerrainKind.Green;
+			d.kind = (canTree && (seed + debris.Count * 7919) % 100 < 55) ? 1 : 0;
+			if (d.kind == 1)
+			{
+				d.size = 4.0 + 4.0 * (double)((seed * 31 + debris.Count * 97) % 100) / 100.0;   // 树高 8-16 m
+				d.mass = 150.0 + 450.0 * (double)((seed * 17 + debris.Count * 53) % 100) / 100.0;
+			}
+			else
+			{
+				d.size = 0.8 + 1.7 * (double)((seed * 13 + debris.Count * 29) % 100) / 100.0;
+				d.mass = 200.0 + 1800.0 * (double)((seed * 7 + debris.Count * 41) % 100) / 100.0;
+			}
+			double r = (double)((seed * 101 + debris.Count * 211) % 1000) / 1000.0;
+			double sign = ((seed + debris.Count) % 2 == 0) ? 1.0 : -1.0;
+			d.s = sign * (0.15 + 0.75 * r) * Rmax;
+			d.h = 0.0;
+			d.age = 0.0;
+			d.spin = 6.2831853 * (double)((seed * 3 + debris.Count * 11) % 100) / 100.0;
+			debris.Add(d);
+		}
+		// 推进
+		double R = (planet != null) ? planet.Radius : 1.0;
+		for (int i = debris.Count - 1; i >= 0; i--)
+		{
+			DebrisInst d = debris[i];
+			d.age += dt;
+			// 风场：debris 位置 → 行星全局 → SampleWind → 投影回 (切向, 径向)
+			double ang = centerAngle + d.s / R;
+			double cos = Math.Cos(ang);
+			double sin = Math.Sin(ang);
+			Double2 radialDir = new Double2(cos, sin);
+			Double2 tanDir = new Double2(0.0 - sin, cos);
+			Double2 pos = radialDir * (R + d.h);
+			Double2 wind = SampleWind(pos, false);   // 相对风（drift 平流由风暴中心速度承担）
+			double wS = Double2.Dot(wind, tanDir);
+			double wH = Double2.Dot(wind, radialDir);
+			double lift = (d.kind == 1) ? DebrisLiftTree : DebrisLiftRock;
+			double windAbs = Math.Sqrt(wS * wS + wH * wH);
+			if (!d.airborne)
+			{
+				// 地面静止：风超过起扬阈值才被卷起（否则原地不动，避免"没风也在飘"）
+				if (windAbs < lift)
+				{
+					continue;
+				}
+				d.airborne = true;
+				d.vh = Math.Max(0.0, wH);
+			}
+			// 气动阻力（ρ Cd A |v_rel| v_rel / m）+ 重力；A ≈ 特征尺寸²
+			double area = d.size * d.size;
+			double cd = (d.kind == 1) ? 1.5 : 1.2;
+			double k = 0.5 * DebrisRho * cd * area / Math.Max(d.mass, 1.0);
+			double relS = wS - d.vs;
+			double relH = wH - d.vh;
+			double relAbs = Math.Sqrt(relS * relS + relH * relH);
+			d.vs += k * relAbs * relS * dt;
+			d.vh += (k * relAbs * relH - DebrisG) * dt;
+			d.s += d.vs * dt;
+			d.h += d.vh * dt;
+			d.spinV = 0.5 * d.vs / Math.Max(d.size, 0.5);
+			d.spin += d.spinV * dt;
+			if (d.h <= 0.0)
+			{
+				// 落地：反弹 25% 并衰减（简单恢复系数），速度过低则重新锚定
+				d.h = 0.0;
+				d.vh = (d.vh < -1.0) ? (0.0 - d.vh * 0.25) : 0.0;
+				d.vs *= 0.85;
+				if (Math.Abs(d.vs) < 0.6 && d.vh <= 0.0)
+				{
+					d.airborne = false;
+					d.vs = 0.0;
+					d.vh = 0.0;
+				}
+			}
+			// 出界/超龄回收
+			if (Math.Abs(d.s) > Rmax * 6.0 || d.h > Htop * 2.0 || d.age > 600.0)
+			{
+				debris.RemoveAt(i);
+				continue;
+			}
+			if (Math.Abs(d.vs) > 8.0 || d.h > 3.0)
+			{
+				debrisActive = true;
+			}
+		}
+	}
 	// 合并上限基准（防无限加强）。
 	public double rmaxBase;
 	public double vmaxBase;
@@ -324,6 +580,8 @@ public class WeatherSystem
 	// transitionAnimT 0→1（3 秒），渲染端云 alpha 淡出淡入过渡；完成后 type=transitionTo。
 	public StormType transitionTo;
 	public double transitionAnimT = -1.0;
+	// 中点已换型标记（淡出结束那一帧执行 type=transitionTo + 重配尺度 + 重建粒子）。
+	private bool transitionSwitched;
 	// 转变完成后通知渲染端重建粒子（按新类型分布）。
 	public bool RebuildPuffsFlag;
 
@@ -466,6 +724,28 @@ public class WeatherSystem
 	// 最多重算一次。行为等价（同帧参数不变则结果完全相同）。
 	private bool cWindDirty = true;
 
+	// 性能（同类缓存）：附属现象中心 = f(centerAngle, Rmax, sOff)。其中 Cos/Sin(centerAngle)
+	// 与行星半径只随 centerAngle 变，却在每次风采样里对每个附属现象实例重算（Tornado/
+	// DownburstHorizontal 每实例一次）——每帧数千次纯冗余的 Cos/Sin。按 centerAngle 值
+	// 惰性缓存：Advance 每帧至多改一次 centerAngle → 每帧最多重算一次。
+	private double cCenterAng = double.NaN;
+	private Double2 cCenterPos;
+	private Double2 cCenterTan;
+
+	private void RefreshCenterCache()
+	{
+		if (cCenterAng == centerAngle)
+		{
+			return;
+		}
+		cCenterAng = centerAngle;
+		double r = (planet != null) ? planet.Radius : 1.0;
+		double cos = Math.Cos(centerAngle);
+		double sin = Math.Sin(centerAngle);
+		cCenterPos = new Double2(cos * r, sin * r);
+		cCenterTan = new Double2(0.0 - sin, cos);
+	}
+
 	// 缓存刷新：参数写点标记后重算 4 个风圈（无参变化时零开销）。
 	private void RefreshWindCircles()
 	{
@@ -532,6 +812,19 @@ public class WeatherSystem
 	// 多实例 + 随机位置：每次添加生成新实例，位置在风暴内随机（沿 s 轴）。
 	public bool manualTornado;
 	public bool manualDownburst;
+
+	// 自然生成掷骰（确定性伪随机）：时间（age）混进哈希 → 每帧取值都变，概率 =
+	// 每秒 rate/10000（∝ dt，时间加速下按游戏时间统计的期望次数不变，同存档可复现）。
+	// 原实现是 `seed×常数 % 10000 < dt×rate`，而 seed 是建风暴时赋一次的常量 →
+	// 条件恒不成立：自然龙卷/下暴/阵风锋/闪电与类型转变从未触发过。
+	private bool Roll(double ratePerSec, double dt, uint salt)
+	{
+		uint h = (uint)seed * salt + (uint)(age * 100.0) * 2246822519u;
+		h ^= h >> 15;
+		h *= 2654435761u;
+		h ^= h >> 13;
+		return (double)(h % 10000u) < dt * ratePerSec;
+	}
 
 	// 确定性随机偏移（种子混合实例序号，同风暴同位置稳定）。
 	// attempt 参数：防重叠重试时扰动种子（否则重试生成相同位置死循环）。
@@ -634,9 +927,7 @@ public class WeatherSystem
 			RandomPosAvoid(fx, 0.9, true);      // 随机合适位置 + 防重叠
 			tornadoes.Add(fx);
 			tornadoStrength = fx.strength;      // 兼容同步
-			phaseTornado = fx.phase;
 			dissolvingTornado = false;
-			manualTornado = true;
 			return true;
 		}
 		return false;
@@ -665,9 +956,7 @@ public class WeatherSystem
 		RandomPosAvoid(fx, 0.6, false);         // 随机合适位置 + 防重叠
 		downbursts.Add(fx);
 		downburstStrength = fx.strength;        // 兼容同步
-		phaseDownburst = fx.phase;
 		dissolvingDownburst = false;
-		manualDownburst = true;
 		return true;
 	}
 
@@ -783,7 +1072,7 @@ public class WeatherSystem
 						if (a.strength >= b.strength)
 						{
 							a.sOff = mid;
-							a.strength = Math.Min(2.0, a.strength + b.strength * 0.25);
+							a.strength = Math.Min(1.4, a.strength + b.strength * 0.25);   // 上限统一 1.4（原此处 2.0 → 55×2.0=110 m/s 出流远超观测极值 67 m/s）
 							downbursts.RemoveAt(j);
 						}
 						else
@@ -811,7 +1100,7 @@ public class WeatherSystem
 						if (a.strength >= b.strength)
 						{
 							a.sOff = (a.sOff * a.strength + b.sOff * b.strength) / (a.strength + b.strength);
-							a.strength = Math.Min(2.0, a.strength + b.strength * 0.25);
+							a.strength = Math.Min(1.4, a.strength + b.strength * 0.25);   // 上限统一 1.4（同下暴）
 							gustFronts.RemoveAt(j);
 						}
 						else
@@ -911,17 +1200,23 @@ public class WeatherSystem
 		mergeCount = 0;
 		tornadoStrength = 0.0;
 		downburstStrength = 0.0;
-		phaseTornado = 0.0;
-		phaseDownburst = 0.0;
-		if (spec.lifetimeSec > 0.0)
+		// 附属现象现实配额（现实性审计）：现实只有约 1/3 的超级单体能产龙卷、一生 1-3 个；
+		// 下击暴流/阵风锋同样 1-2 个。原实现是"每秒概率"连续生成（龙卷 0.6%/s → 8h 成熟期
+		// 期望 ~170 次，恒满 4 个）——比现实高两个数量级。改为配额模型：种子决定这个风暴
+		// 一生能产几个，逐个消耗；-1 = 不限额（配置 phenomenaRealism 关，退回旧连续生成）。
+		if (TyphoonConfig.I.phenomenaRealism)
 		{
-			// 巨行星风暴寿命 ×30（台风 3 天 → 90 天，大红斑类；非永久——用户反对 0=持续）
-			lifetime = spec.lifetimeSec * (0.8 + 0.4 * (double)seed * 0.5 + 0.4 * 0.5) * cL;
+			tornadoQuota = (spec.tornadoHost && seed % 100 < 30) ? (1 + seed % 3) : 0;
+			downburstQuota = CanDownburst() ? (1 + (seed / 3) % 2) : 0;
+			gustFrontQuota = CanGustFront() ? (1 + (seed / 7) % 2) : 0;
 		}
 		else
 		{
-			lifetime = 0.0;
+			tornadoQuota = -1;
+			downburstQuota = -1;
+			gustFrontQuota = -1;
 		}
+		landWindK = 1.0;   // 登陆摩擦乘子归位（新风暴未受摩擦）
 		age = 0.0;
 		// 能量制：所有系统能量 55 起步（发展），stage 由 energy 驱动（无 lifetime
 		// 特例——台风也走完整发展→成熟→消散，不再"持续成熟"）。
@@ -1015,6 +1310,22 @@ public class WeatherSystem
 	public double TransitionBlend()
 	{
 		return (transitionAnimT >= 0.0) ? Math.Min(1.0, transitionAnimT) : 0.0;
+	}
+
+	// 类型转变 alpha 包络（1 → 0.05 → 1，3 秒）：渲染端折进 spawnAnimT（云/雨/附属/
+	// 天空穹顶的 alpha 全链都乘它）→ 整团天气淡出、中点换型、再淡入。
+	public float TransitionAlphaMul()
+	{
+		if (transitionAnimT < 0.0)
+		{
+			return 1f;
+		}
+		double tp = Math.Min(1.0, transitionAnimT);
+		if (tp < 0.5)
+		{
+			return (float)(1.0 - 0.95 * (tp / 0.5));      // 淡出 1 → 0.05
+		}
+		return (float)(0.05 + 0.95 * ((tp - 0.5) / 0.5)); // 淡入 0.05 → 1
 	}
 
 	// 按当前 type 重配尺度（类型转变完成后调用，保留位置/年龄/种子）。
@@ -1153,17 +1464,23 @@ public class WeatherSystem
 			wmaxDisplay = vmaxDisplay * sp.updraft;
 			cWindDirty = true;   // vmaxDisplay 变化 → 风圈缓存失效
 		}
-		// 类型转变推进：3 秒过渡完成后切类型并重配尺度（粒子在原基础上转变）。
+		// 类型转变推进：淡出(0→0.5) → 中点换型+重配尺度+重建粒子(0.5) → 淡入(0.5→1)。
+		// 换型放在最暗那一帧，尺度突变与粒子重分布都被藏住。
 		if (transitionAnimT >= 0.0)
 		{
 			transitionAnimT += dt / 3.0;
-			if (transitionAnimT >= 1.0)
+			if (!transitionSwitched && transitionAnimT >= 0.5)
 			{
+				transitionSwitched = true;
 				type = transitionTo;
-				transitionAnimT = -1.0;
 				ApplyTypeScale();
 				RebuildPuffsFlag = true;   // 通知渲染端按新类型重建粒子分布
 				cWindDirty = true;   // 类型变化 → 风圈缓存失效
+			}
+			if (transitionAnimT >= 1.0)
+			{
+				transitionAnimT = -1.0;
+				transitionSwitched = false;
 			}
 		}
 		// 合并动画推进（0→1，3 秒）；到 1 由 Manager 移除被吞方/重置状态。
@@ -1226,41 +1543,17 @@ public class WeatherSystem
 		// （终审🔴-1）— 大气分级 cLnow 提前定义（三速率表共用）：developRate/dissolveRate
 		// 与 netPerSec 同步 ÷cLnow——原只接 netPerSec 导致巨行星台风"发育 2.5 天→成熟 149 天
 		// →消散 12h"三阶段尺度失衡（大红斑 90 天只兑现一半）。
+		// 结构整理：三阶段速率改从 Spec 表读（原为三条 if-else 硬编码链，与 Spec 表重复）。
+		// 口径：发展 25 能量、成熟 50 能量、消散 30 能量，除以表内现实时长（游戏秒）。
+		// 现实依据：台风 2.5d/5d/12h（生命史 5-9 天）、单体 20min/45min/20min、
+		// 多单体与超单 1.5h/8h/3h、2h、飑线与 MCS 3h/18h/6h、沙尘暴 4h/24h/8h。
 		double cLnow = (atmoClass == 2) ? 30.0 : ((atmoClass == 1) ? 3.0 : 1.0);
-		double netPerSec;
-		if (type == StormType.Typhoon) netPerSec = 50.0 / 432000.0;          // 现实 ~5 天
-		else if (type == StormType.Cell) netPerSec = 50.0 / 2700.0;           // 现实 ~45min
-		else if (type == StormType.Multicell) netPerSec = 50.0 / 28800.0;     // 现实 ~8h
-		else if (type == StormType.Supercell) netPerSec = 50.0 / 28800.0;     // 现实 ~8h
-		else if (type == StormType.SquallLine) netPerSec = 50.0 / 64800.0;    // 现实 ~18h
-		else if (type == StormType.MCS) netPerSec = 50.0 / 64800.0;           // 现实 ~18h
-		else netPerSec = 50.0 / 86400.0;                                      // 沙尘暴 ~24h
-		// 发展期/消散期现实化（用户：发展期 2.5 分钟成型、消散 20× 相对语义这些
-		// 保留也可以去了，发展期交给时间加速）：退役 发展 60-120s 快进与 20× 消散
-		// 相对语义，发展/消散均按现实气象时长独立标定（与成熟 netPerSec 同源口径）。
-		// 发展期（55→80 = 25 能量，生成→成熟）：台风 2.5 天/单体 20min/多单体 1.5h/
-		// 超单 1.5h/飑线 3h/MCS 3h/沙尘暴 4h 游戏时间。
-		double developRate;
-		if (type == StormType.Typhoon) developRate = 25.0 / 216000.0;    // ~2.5 天
-		else if (type == StormType.Cell) developRate = 25.0 / 1200.0;     // ~20min
-		else if (type == StormType.Multicell) developRate = 25.0 / 5400.0;   // ~1.5h
-		else if (type == StormType.Supercell) developRate = 25.0 / 5400.0;   // ~1.5h
-		else if (type == StormType.SquallLine) developRate = 25.0 / 10800.0; // ~3h
-		else if (type == StormType.MCS) developRate = 25.0 / 10800.0;    // ~3h
-		else developRate = 25.0 / 14400.0;                               // 沙尘暴 ~4h
-		developRate /= cLnow;   // （终审🔴-1）— 大气分级同步（巨行星发育 ×30 放慢）
-		// 消散期（30→0 = 30 能量，快速崩溃但可观察）：台风 12h/单体 20min/多单体 3h/
-		// 超单 2h/飑线 6h/MCS 6h/沙尘暴 8h；÷terrainE → 登陆/沙漠摩擦加速消散（物理正确：
-		// 台风登陆 12h → 岩石 5.4h/沙漠 2.7h，与"登陆 12-24h 消散"一致）。
-		double dissolveRate;
-		if (type == StormType.Typhoon) dissolveRate = 30.0 / 43200.0;    // ~12h
-		else if (type == StormType.Cell) dissolveRate = 30.0 / 1200.0;    // ~20min
-		else if (type == StormType.Multicell) dissolveRate = 30.0 / 10800.0;  // ~3h
-		else if (type == StormType.Supercell) dissolveRate = 30.0 / 7200.0;   // ~2h
-		else if (type == StormType.SquallLine) dissolveRate = 30.0 / 21600.0; // ~6h
-		else if (type == StormType.MCS) dissolveRate = 30.0 / 21600.0;    // ~6h
-		else dissolveRate = 30.0 / 28800.0;                               // 沙尘暴 ~8h
-		dissolveRate /= cLnow;   // （终审🔴-1）— 大气分级同步（巨行星消散 ×30 放慢，三阶段统一）
+		TypeSpec specNow = Spec[(int)type];
+		double netPerSec = Math.Max(50.0 / Math.Max(specNow.matureSec, 1.0), 0.000002);
+		// 发展期（55→80）与消散期（30→0）÷cLnow：大气分级同步（巨行星寿命 ×30，
+		// 三阶段同比例，防"发育 2.5 天→成熟 149 天"的阶段尺度失衡）。
+		double developRate = 25.0 / Math.Max(specNow.developSec, 1.0) / cLnow;
+		double dissolveRate = 30.0 / Math.Max(specNow.dissolveSec, 1.0) / cLnow;
 		// 下限 0.0005→0.00005：台风现实 5 天 = 0.000116/s，被旧下限钳成 28h
 		// （"可等尺度"时代的钳值，现实化后失效）——下限只是防净耗散为 0 的保险，须低于
 		// 最慢类型（台风海上 0.000116）。
@@ -1323,7 +1616,10 @@ public class WeatherSystem
 					if (ewrcCooldown <= 0.0)
 					{
 						ewrcT = 0.0;
-						ewrcCooldown = 86400.0;   // 现实化：置换后 1 天冷却（真实 EWRC 周期 1-3 天；台风 5 天寿命 ~5 次置换）
+						// 现实性审计：真实 EWRC 周期 1-3 天，一次眼壁置换从开始到完成约 1 天；
+						// 原冷却 1 天 → 5 天寿命内 ~5 次置换，偏多 → 改 2 天（1-2 次/生命史）。
+						// 置换"过程"仍压缩成 180 游戏秒（帧化 ≥30 帧），否则玩家永远看不到。
+						ewrcCooldown = 172800.0;
 					}
 				}
 			}
@@ -1433,10 +1729,26 @@ public class WeatherSystem
 		// 每帧被 vmaxTargetBase×能量因子覆盖成死代码）。登陆摩擦的风速衰减（快过程）与
 		// 能量枯竭（慢过程）叠加：风先崩、能量后崩 = 物理正确（摩擦耗散快/热力耗散慢），
 		// 🟡-7 从 bug 变 feature。系数永久不回弹（可接受简化）。
-		if (overLand && type == StormType.Typhoon && stage >= 1)
+		// 登陆摩擦（持久化 landWindK）——现实性审计抓到的潜伏 bug：原实现每帧只对
+		// vmaxTarget 乘一次 (1-0.005×friction×dt)，但下一帧 stage 分支会把 vmaxTarget
+		// 按档位公式重新赋值 → 乘子从不累积、登陆风速实际不衰减（注释"系数永久不回弹"
+		// 也不成立）。现在改为持久乘子，速率同时现实化：原 0.5%/s（e-folding 200s =
+		// 3 分钟风毁）夸张两个数量级，现实登陆台风风衰减 e-folding 12-24h →
+		// 用 64800 游戏秒（18h）÷ 地形粗糙度（岩石 1.6 / 绿地 1.0 / 沙漠 0.55）。
+		// 回到海上缓慢恢复（现实：重回暖水可再增强，恢复尺度 ~1-2 天）。
+		if (type == StormType.Typhoon && stage >= 1)
 		{
-			double friction = (terrainKind == TerrainKind.Rock) ? 1.6 : ((terrainKind == TerrainKind.Green) ? 1.0 : 0.55);
-			vmaxTarget *= Math.Max(0.35, 1.0 - 0.005 * friction * dt);
+			if (overLand)
+			{
+				double friction = (terrainKind == TerrainKind.Rock) ? 1.6 : ((terrainKind == TerrainKind.Green) ? 1.0 : 0.55);
+				landWindK -= Math.Min(landWindK, dt / 64800.0 * friction);
+			}
+			else
+			{
+				landWindK += dt / 172800.0 * (1.0 - landWindK);
+			}
+			landWindK = Clamp(landWindK, 0.3, 1.0);
+			vmaxTarget *= landWindK;
 		}
 		if (energy <= 0.0)
 		{
@@ -1474,6 +1786,9 @@ public class WeatherSystem
 		// （warp1000x 1.8 圈/5000x 3.1 圈）；"能量下降过慢没随加速反应"是同一 bug。
 		// 修复：移动跟随能量时间基准（消散期同步钳制，1x 零变化，消散可见性保留）。
 		centerAngle = WrapTwoPi(centerAngle + moveSpeed / planet.Radius * effDt);
+
+		// 障碍物（树/石）卷起与飞行：用全量 dt（飞行是快过程，与粒子/雨同尺度节奏）
+		AdvanceDebris(dt);
 
 		// 附属现象自然演化（成熟期：超级单体/飑线/MCS 概率产龙卷；所有强系统概率下击暴流）
 		// 消散动画：dissolving 时 ~3 秒衰减（ClearPhenomena 触发），否则自然缓慢衰减。
@@ -1516,9 +1831,12 @@ public class WeatherSystem
 			// 更强相关类型转变（单体→多单体→超级单体→MCS、飑线→MCS），台风不转；
 			// 3 秒粒子过渡动画（渲染端云淡出淡入），完成后按新类型重配尺度。
 			// 沙尘暴不参与类型转变（干燥系统，不会变成雷暴）
-			if (transitionAnimT < 0.0 && type != StormType.Typhoon && type != StormType.DustStorm && (ulong)(seed * 2246822519u) % 10000 < dt * 2.0)
+			if (transitionAnimT < 0.0 && type != StormType.Typhoon && type != StormType.DustStorm && Roll(2.0, dt, 2246822519u))
 			{
-				StormType nt = StormType.Cell;
+				// 默认 = 不变，并用 nt > type 硬保证"只能变强"。原实现默认值写成了
+				// StormType.Cell，而 MCS 没有任何分支命中 → 中尺度会"退化"成单体
+				// （成熟期 13 次判定，几乎必然发生；此前判定门恒为假所以没暴露）。
+				StormType nt = type;
 				if (type == StormType.Cell)
 				{
 					nt = StormType.Multicell;
@@ -1535,7 +1853,7 @@ public class WeatherSystem
 				{
 					nt = StormType.MCS;
 				}
-				if (nt != type)
+				if (nt > type)
 				{
 					TransitionTo(nt);
 				}
@@ -1560,8 +1878,19 @@ public class WeatherSystem
 						fx.phase = Math.Min(1.0, fx.phase + dt / 3.0);
 					}
 				}
-				if (tornadoes.Count < 4 && ((double)(seed % 17) == 0.0 || (seed * 2654435761u % 10000) < dt * 60.0))
+				// 现实配额制（phenomenaRealism，现实性审计）：一生只产 tornadoQuota 个
+				// （现实仅约 1/3 超单产龙卷、一生 1-3 个），且同时最多 2 个存活（真实龙卷
+				// 是一轮一轮生成而非同时挂 4 个）；quota<0 = 旧行为（不限额连续生成）。
+				bool canSpawnTornado = (tornadoQuota < 0)
+					? (tornadoes.Count < 4)
+					: (tornadoQuota > 0 && tornadoes.Count < 2);
+				double tornadoRate = (tornadoQuota < 0) ? 60.0 : 6.0;
+				if (canSpawnTornado && Roll(tornadoRate, dt, 2654435761u))
 				{
+					if (tornadoQuota > 0)
+					{
+						tornadoQuota--;
+					}
 					FxInst fx = new FxInst();
 					fx.strength = 0.5 + category / 6.0;   // 强度跟母体
 					fx.phase = 0.0;
@@ -1576,7 +1905,6 @@ public class WeatherSystem
 				{
 					tornadoStrength = Math.Max(tornadoStrength, fx.strength);
 				}
-				phaseTornado = (tornadoes.Count > 0) ? tornadoes[0].phase : 0.0;
 				dissolvingTornado = tornadoes.Count > 0;
 			}
 			// 下暴多实例同理（上限 4，自然寿命 240s）。
@@ -1596,8 +1924,17 @@ public class WeatherSystem
 					fx.phase = Math.Min(1.0, fx.phase + dt / 3.0);
 				}
 			}
-			if (downbursts.Count < 4 && CanDownburst() && (seed * 2654435761u % 10000) < dt * 30.0)
+			// 下暴配额（现实：一次强雷暴过程 1-2 个微下击暴流，同时最多 2 个）。
+			bool canSpawnDownburst = (downburstQuota < 0)
+				? (downbursts.Count < 4)
+				: (downburstQuota > 0 && downbursts.Count < 2);
+			double downburstRate = (downburstQuota < 0) ? 30.0 : 4.0;
+			if (canSpawnDownburst && CanDownburst() && Roll(downburstRate, dt, 1597334677u))
 			{
+				if (downburstQuota > 0)
+				{
+					downburstQuota--;
+				}
 				FxInst fx = new FxInst();
 				fx.strength = 0.5 + category / 6.0;   // 强度跟母体
 				fx.phase = 0.0;
@@ -1611,7 +1948,6 @@ public class WeatherSystem
 			{
 				downburstStrength = Math.Max(downburstStrength, fx.strength);
 			}
-			phaseDownburst = (downbursts.Count > 0) ? downbursts[0].phase : 0.0;
 			dissolvingDownburst = downbursts.Count > 0;
 			// 阵风锋自然演化（成熟期，上限 3）：衰减/相位同下暴，寿命 300s。
 			for (int gi = gustFronts.Count - 1; gi >= 0; gi--)
@@ -1630,8 +1966,17 @@ public class WeatherSystem
 					fx.phase = Math.Min(1.0, fx.phase + dt / 3.0);
 				}
 			}
-			if (gustFronts.Count < 3 && CanGustFront() && (seed * 2654435761u % 10000) < dt * 12.0)
+			// 阵风锋配额（现实：每个成熟中尺度系统 1 条出流边界，同时最多 2 条）。
+			bool canSpawnGust = (gustFrontQuota < 0)
+				? (gustFronts.Count < 3)
+				: (gustFrontQuota > 0 && gustFronts.Count < 2);
+			double gustRate = (gustFrontQuota < 0) ? 12.0 : 3.0;
+			if (canSpawnGust && CanGustFront() && Roll(gustRate, dt, 3266489909u))
 			{
+				if (gustFrontQuota > 0)
+				{
+					gustFrontQuota--;
+				}
 				FxInst fx = new FxInst();
 				fx.strength = 0.5 + category / 6.0;
 				fx.phase = 0.0;
@@ -1663,7 +2008,7 @@ public class WeatherSystem
 					fx.phase = Math.Min(1.0, fx.phase + dt / 3.0);
 				}
 			}
-			if (lightningBursts.Count < 2 && (seed * 2654435761u % 10000) < dt * 8.0)
+			if (lightningBursts.Count < 2 && Roll(8.0, dt, 40503u))
 			{
 				FxInst fx = new FxInst();
 				fx.strength = 0.5 + category / 6.0;
@@ -1781,17 +2126,15 @@ public class WeatherSystem
 	// 风暴中心的行星坐标（centerAngle 处、地面高度），供矢量风计算相对位置。
 	private Double2 StormCenterPos()
 	{
-		double R = (planet != null) ? planet.Radius : 1.0;
-		return new Double2(Math.Cos(centerAngle) * R, Math.Sin(centerAngle) * R);
+		RefreshCenterCache();
+		return cCenterPos;
 	}
 
 	// 附属现象实例中心（风暴中心 + 切向偏移 sOff×Rmax，沿经度方向）。
 	private Double2 FxCenterPos(FxInst fx)
 	{
-		double R = (planet != null) ? planet.Radius : 1.0;
-		Double2 c = new Double2(Math.Cos(centerAngle) * R, Math.Sin(centerAngle) * R);
-		Double2 tan = new Double2(0.0 - Math.Sin(centerAngle), Math.Cos(centerAngle));
-		return c + tan * (fx.sOff * Rmax);
+		RefreshCenterCache();
+		return cCenterPos + cCenterTan * (fx.sOff * Rmax);
 	}
 
 	// 地形判定（正相 + 变相）：
@@ -1989,9 +2332,93 @@ public class WeatherSystem
 		}
 	}
 
-	// 龙卷水平旋转矢量：方向 = 玩家相对龙卷中心的水平切向（绕垂直轴旋转），
-	// 大小 = 90m/s EF5 基准 × rotCore（核内刚体平滑）× funnel（地面最强）。
-	// 多实例遍历（数量限制解除）：每个龙卷独立中心（sOff 偏移）与强度累加。
+	// 龙卷尺度基准（米）：漏斗宽度不能随母体 Rmax 无限放大 —— Rmax 按类型表给
+	// （超单 3.6km / 飑线 5.9km / MCS 12.4km），Rmax×3.8% 在中尺度上就是 471m 核
+	// （楔形 1037m）：1km 外还在核内满速，渲染端也画出 ~1km 宽的"漏斗"。以 4km 为
+	// 基准钳制，风场与渲染端共用 → 看得见的漏斗 = 吸你的范围。
+	public double TornadoRefR => Math.Min(Rmax, 4000.0);
+
+	// EF5 风速阈值（m/s）：≥ 此值的龙卷进入"超巨型"档。
+	public const double TornadoEf5Wind = 89.4;
+
+	// 龙卷尺度倍率（实例）：类型倍率 × 超巨型倍率 —— 风场与渲染端共用同一个倍率。
+	// 超巨型：峰值风速 ≥ EF5（89 m/s）的少数极端龙卷额外放大（现实最宽的 El Reno 2013
+	// 达 4.2km，典型 EF5 楔形 1-2km）：倍率随风速 89→126 m/s 从 1 升到 3，于是极端
+	// 中尺度楔形的核半径可到 ~1km（"核可以到 1000"）。只有约 15% 的强风暴龙卷能到 EF5，
+	// 所以超巨型是稀有事件，不会遍地都是。
+	public double TornadoSizeK(FxInst fx)
+	{
+		double k = 1.0;
+		switch (fx.variant)
+		{
+			case 1: k = 2.2; break;    // 楔形：宽实墙
+			case 2: k = 0.4; break;    // 绳状：细长
+			case 3: k = 1.3; break;    // 水龙卷：水雾柱略宽
+			case 4: k = 0.7; break;    // 陆龙卷：细尘柱
+			case 5: k = 0.85; break;   // 多涡旋：主涡略细
+			case 7: k = 0.7; break;    // gustnado：矮小尘旋
+		}
+		double pw = TornadoPeakWind(fx);
+		if (pw > TornadoEf5Wind)
+		{
+			k *= 1.0 + 2.0 * Clamp01((pw - TornadoEf5Wind) / 37.0);
+		}
+		return k;
+	}
+
+	// 龙卷核半径（实例口径，米）= 尺度基准（钳 4km）× 0.038 × 尺度倍率，下限 30m。
+	// 与渲染端地面漏斗半径同源（Rmax×0.024×1.6 ≈ ×0.038），风场 / EF / 卷入判定共用。
+	public double TornadoCoreR(FxInst fx)
+	{
+		return Math.Max(TornadoRefR * 0.038 * TornadoSizeK(fx), 30.0);
+	}
+
+	// 尺度标签（HUD/雷达预报）：≥500m 超巨型、≥250m 大型。
+	public static string TornadoSizeName(double coreM)
+	{
+		if (coreM >= 500.0)
+		{
+			return "超巨型";
+		}
+		if (coreM >= 250.0)
+		{
+			return "大型";
+		}
+		return "";
+	}
+
+	// 龙卷实例峰值风速（m/s）：90 m/s（EF5 基准）× 实例强度（0.5+cat/6）× 种子散布（0.5-1.0）。
+	// 种子散布让"同一母体可产不同等级的龙卷"（现实：一个超单先产 EF1 再产 EF4）。
+	// 【EF 核对】风场 / EF 显示 / 卷入判定 全部读这个值 —— 原来 EF 显示读的是**母体**
+	// EyewallWind（20-40 m/s），显示的 EF1 和实际吸你 90-120 m/s 的风完全对不上。
+	public double TornadoPeakWind(FxInst fx)
+	{
+		// 散布取平方（0.45-1.0，低端密高端疏）：现实 EF4+ 只占全部龙卷的 1-2%，
+		// 线性散布会让"cat4 母体产的龙卷 68% 都是 EF5"，过于夸张。
+		double p = (fx.seed % 100.0) / 100.0;
+		double spread = 0.45 + 0.55 * p * p;
+		return 90.0 * fx.strength * spread;
+	}
+
+	// 本系统当前最强龙卷的 EF 级（无龙卷返回 -1）：HUD 详情卡 / 雷达预报 / 指挥中心共用。
+	public int StrongestTornadoEf()
+	{
+		int best = -1;
+		for (int i = 0; i < tornadoes.Count; i++)
+		{
+			int ef = EfFromWind(TornadoPeakWind(tornadoes[i]));
+			if (ef > best)
+			{
+				best = ef;
+			}
+		}
+		return best;
+	}
+
+	// 龙卷水平旋转矢量：方向 = 相对龙卷中心的水平切向；大小 = 实例峰值风速 ×
+	// Rankine 剖面（核内刚体 → 核外 1/r）× exp(-((r−rc)/6rc)²) 快速截断。
+	// 尺度用核半径 rc（不是 Rmax×0.3）：核内满速、2rc 半速、1km 外基本无风，
+	// 与判定/视觉对齐（原实现 5km 外还有 20 m/s）。多实例：逐龙卷独立中心与强度。
 	private Double2 TornadoHorizontal(double s, double h, Double2 globalPos)
 	{
 		Double2 wind = Double2.zero;
@@ -2005,7 +2432,7 @@ public class WeatherSystem
 			}
 			Double2 center = FxCenterPos(fx);
 			Double2 r = globalPos - center;
-			double rn = r.x * nrm.x + r.y * nrm.y;           // r 的径向分量（= 玩家总高度）
+			double rn = r.x * nrm.x + r.y * nrm.y;           // r 的径向分量（与锚点的高度差）
 			Double2 rHoriz = r - nrm * rn;                   // 水平分量（垂直于径向）
 			double rm = rHoriz.magnitude;
 			if (rm < 0.5)
@@ -2013,15 +2440,14 @@ public class WeatherSystem
 				continue;
 			}
 			Double2 inward = new Double2(0.0 - rHoriz.x, 0.0 - rHoriz.y) / rm;   // 纯水平向心
-			double sRel = s - fx.sOff * Rmax;                // 玩家相对该龙卷的切向坐标
-			double num = Math.Abs(sRel);
-			double tro = num / Math.Max(Rmax * 0.3, 40.0);
-			double troZ = tro / StormRenderer.tornadoZoneHoriz;
-			double rotCore = 1.0 / Math.Max(troZ, 0.55);
-			double funnel = Math.Pow(1.0 - Clamp01(Math.Max(0.0, h) / Htop / 0.9), 0.7);
-			double edge = Math.Exp(0.0 - Pow2(num / (Rmax * 2.5)));   // 收紧（原 Router）
+			double rc = TornadoCoreR(fx);
+			double rx = rm / rc;
+			double prof = (rx <= 1.0) ? (0.6 + 0.4 * rx) : (1.0 / rx);            // Rankine 剖面
+			double cut = Math.Exp(0.0 - Pow2((rm - rc) / (rc * 6.0)));            // 快速截断（非长尾）
+			double hTopT = Math.Max(Hbase * 1.2, 300.0);                          // 垂直尺度 = 漏斗（云底）
+			double funnel = Math.Pow(1.0 - Clamp01(Math.Max(0.0, h) / hTopT), 0.7);
 			double grow = Math.Min(fx.phase, fx.strength);
-			double speed = 90.0 * fx.strength * rotCore * funnel * edge * grow;
+			double speed = TornadoPeakWind(fx) * prof * cut * funnel * grow;
 			wind += inward * speed;
 		}
 		return wind;
@@ -2050,6 +2476,9 @@ public class WeatherSystem
 				continue;
 			}
 			Double2 outDir = rHoriz / rm;   // 纯水平径向向外
+			// 现实性审计：基准出流 60 m/s × strength（0.5+cat/6，合并上限 1.4）= 70-84 m/s，
+			// 超过观测极值（微下击暴流地面出流峰值 67 m/s）→ 基准降到 55 m/s
+			// （55×1.17=64 m/s 强微下击暴流，×1.4=77 m/s 仅在连续合并后短暂出现）。
 			double sRel = s - fx.sOff * Rmax;
 			double num = Math.Abs(sRel);
 			double dro = num / Math.Max(Rmax * 0.9, 300.0);
@@ -2062,7 +2491,7 @@ public class WeatherSystem
 			double ground = Clamp01(1.0 - Math.Max(0.0, h) / Htop / 0.5);
 			double edge = Math.Exp(0.0 - Pow2(num / (Rmax * 2.5)));   // 收紧（原 Router）
 			double grow = Math.Min(fx.phase, fx.strength);
-			double speed = 60.0 * fx.strength * spread * (0.5 + 0.5 * ground) * edge * grow;
+			double speed = 55.0 * fx.strength * spread * (0.5 + 0.5 * ground) * edge * grow;
 			wind += outDir * speed;
 		}
 		return wind;
@@ -2151,18 +2580,12 @@ public class WeatherSystem
 		// **符号修复**：原为 `w +=`（上升），与注释"强下沉"矛盾——下击暴流
 		// 应该是下沉气流（w 负），玩家在下击暴流中心被往下压。改 `w -=`（下沉）。
 		// 下暴多实例：遍历下沉累加（每实例独立中心/强度/相位）。
-		for (int di = 0; di < downbursts.Count; di++)
+		if (downbursts.Count > 0)
 		{
-			FxInst fx = downbursts[di];
-			if (fx.strength <= 0.05)
-			{
-				continue;
-			}
-			double sRelD = num - Math.Abs(fx.sOff * Rmax);   // 玩家相对该下暴的切向距离
-			double dro = sRelD / Math.Max(Rmax * 0.9, 300.0);
-			double droV = dro / StormRenderer.downburstZoneVert;
-			double sink = Math.Exp(0.0 - Pow2(droV / 1.3));
-			double growD = Math.Min(fx.phase, fx.strength);
+			// 优化 — 循环不变式外提：torYield 只依赖采样点 num 与龙卷列表（与遍历到哪个
+			// 下暴实例无关，且原代码对内层 torYield 是覆盖赋值而非累加），垂直衰减
+			// Exp((0-ht)/0.35) 同理——原来两者都嵌在下暴循环内 = O(下暴数×龙卷数) 次
+			// 重算同一份值。外提后 O(下暴数)+O(龙卷数)，数值结果完全等价。
 			double torYield = 1.0;
 			for (int ti = 0; ti < tornadoes.Count; ti++)
 			{
@@ -2171,10 +2594,29 @@ public class WeatherSystem
 				{
 					continue;
 				}
-				double troY = num / Math.Max(Rmax * 0.3, 40.0);
-				torYield = 1.0 - tfx.strength * Math.Exp(0.0 - Pow2(troY / 0.7));
+				// 以该龙卷自身中心为基准（原用 |s| = 距风暴中心 → 龙卷偏在一边时掩膜错位），
+				// 尺度收到核半径的 3 倍内。
+				double rcY = TornadoCoreR(tfx);
+				double troY = Math.Abs(s - tfx.sOff * Rmax) / (rcY * 3.0);
+				torYield = 1.0 - tfx.strength * Math.Exp(0.0 - Pow2(troY / 1.0));
 			}
-			w -= 55.0 * fx.strength * sink * Math.Exp((0.0 - ht) / 0.35) * growD * torYield;
+			double sinkVert = Math.Exp((0.0 - ht) / 0.35);
+			for (int di = 0; di < downbursts.Count; di++)
+			{
+				FxInst fx = downbursts[di];
+				if (fx.strength <= 0.05)
+				{
+					continue;
+				}
+				double sRelD = num - Math.Abs(fx.sOff * Rmax);   // 玩家相对该下暴的切向距离
+				double dro = sRelD / Math.Max(Rmax * 0.9, 300.0);
+				double droV = dro / StormRenderer.downburstZoneVert;
+				double sink = Math.Exp(0.0 - Pow2(droV / 1.3));
+				double growD = Math.Min(fx.phase, fx.strength);
+				// 现实性审计：下沉核基准 55→40 m/s（观测微下击暴流下沉核 20-40 m/s，
+				// 强出流 55 m/s 在地面出流层，不是下沉核本身）。
+				w -= 40.0 * fx.strength * sink * sinkVert * growD * torYield;
+			}
 		}
 
 		// / — 附属龙卷：极窄强旋转涡旋（叠加在宿主中心，漏斗状垂直结构）。
@@ -2186,13 +2628,15 @@ public class WeatherSystem
 			{
 				continue;
 			}
-			double sRelT = num - Math.Abs(fx.sOff * Rmax);
-			double tro = sRelT / Math.Max(Rmax * 0.3, 40.0);
-			double troV = tro / StormRenderer.tornadoZoneVert;
-			double upCore = Math.Exp(0.0 - Pow2(troV / 0.7));
+			// 相对该龙卷的切向距离：原为 num−|sOff×Rmax|（num=|s| 是距风暴中心 ——
+			// 龙卷在正侧时算错），且尺度用 Rmax×0.3 ≈ 1.1km → 500m 外仍有 ~35 m/s 上升
+			// 气流（"隔得很远也被吸上天"）。现在与水平风同源：核半径 rc 的 1.8 倍内为主。
+			double rcV = TornadoCoreR(fx);
+			double rl = Math.Abs(s - fx.sOff * Rmax) / rcV;
+			double upCore = Math.Exp(0.0 - Pow2(rl / 1.8));
 			double funnel = Math.Pow(1.0 - Clamp01(ht / 0.9), 0.7);
 			double growT = Math.Min(fx.phase, fx.strength);
-			w += 130.0 * fx.strength * 0.42 * upCore * funnel * growT;
+			w += TornadoPeakWind(fx) * 0.6 * upCore * funnel * growT;
 		}
 
 		// 龙卷核心通用环流让位：通用旋转环流（行星切向）在中心两侧方向相反，
@@ -2207,8 +2651,12 @@ public class WeatherSystem
 			{
 				continue;
 			}
-			double troM = num / Math.Max(Rmax * 0.3, 40.0);
-			torMask = Math.Min(torMask, 1.0 - fx.strength * Math.Exp(0.0 - Pow2(troM / 0.8)));
+			// 掩膜同样以龙卷自身中心为基准 —— 原来用 |s|（距风暴中心），而龙卷随机偏置在
+			// ±0.9Rmax，掩膜常常落在没有龙卷的地方，这就是"HUD 左右风不对称"老问题
+			// 其实一直没被真正压掉的原因。
+			double rcM = TornadoCoreR(fx);
+			double troM = Math.Abs(s - fx.sOff * Rmax) / (rcM * 3.0);
+			torMask = Math.Min(torMask, 1.0 - fx.strength * Math.Exp(0.0 - Pow2(troM / 1.0)));
 		}
 		if (torMask < 0.1)
 		{

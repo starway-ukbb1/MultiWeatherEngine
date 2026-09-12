@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using HarmonyLib;
 using SFS;
+using SFS.Parts;
 using SFS.UI;
 using SFS.Variables;
 using SFS.World;
@@ -29,31 +30,11 @@ public class TyphoonManager : MonoBehaviour
 
 	public bool menuOpen;
 
-	// 优化#2 — F6 菜单 GUIStyle 缓存（原 OnGUI 每帧 new 8 个 GUIStyle + GUIStyleState
-	// → 菜单开着就每帧 GC。首次创建复用；tb 分选中/未选中两态）。
-	private GUIStyle mBox;
-
-	private GUIStyle mTitle;
-
-	private GUIStyle mSmall;
-
-	private GUIStyle mBtn;
-
-	private GUIStyle mTbSel;
-
-	private GUIStyle mTb;
-
-	private GUIStyle mLine;
-
-	private GUIStyle mInfo;
-
 	// 底部"活跃天气系统"面板展开状态（F9 切换，标题栏点击也可切换）。
 	public static bool panelExpanded = true;
 
 	// F6 气象菜单可拖动（拖标题栏）。
 	private static Vector2 menuOffset = Vector2.zero;
-	private static bool menuDragging;
-	private static Vector2 menuGrabDelta;
 
 	private double lastWorldTime = double.NaN;
 
@@ -146,14 +127,304 @@ public class TyphoonManager : MonoBehaviour
 	{
 		CheckSceneBoundary();
 		HandleInput();
-		AdvanceSystems();
-		NaturalSpawn();
+		// 本帧游戏时间差（世界时间，钳 30s/帧）：系统演化与自然生成共用同一口径。
+		double gameDt = AdvanceGameClock();
+		AdvanceSystems(gameDt);
+		NaturalSpawn(gameDt);
 		CheckWorldChange();
 		TryMergeAll();
 		ProbePlayer();
+		CheckDebrisImpacts();
 		ApplyShake();
 		UpdateWeatherAudio();
 	}
+
+	// ===== 风暴抛出的障碍物（树/石）撞击火箭 =====
+	// 用户点出的机制落地：游戏原生就有 DestructionReason.RocketCollision / TerrainCollision，
+	// 只要障碍物撞上火箭，解体 + 失败菜单全由游戏自己处理。这里只负责"判定撞击 + 触发"：
+	// debris 由本 mod 自研模拟（质点 + 气动阻力，见 WeatherSystem.AdvanceDebris），
+	// 位置是行星全局坐标，比较前统一转 Unity 世界坐标（与部件 transform.position 同系）。
+	// 致命阈值：相对速度 ≥ 25 m/s（低速掠过只推挤不毁，避免"轻轻擦一下就没"）。
+	private const double DebrisLethalSpeed = 25.0;
+	// 龙卷漏斗内能见度（0-1）：供 StormRenderer 画屏幕级沙尘遮蔽，也供后处理变暗。
+	public static float tornadoObscure;
+	// 沙尘暴能见度（0-1，DustFactor 结果）：供 StormRenderer 把沙墙/云体粒子按强度增密（粒子雾）。
+	public static float dustObscure;
+	// 云/雨包裹能见度（逐型对标现实）：rainVisM = 有效水平能见度(米)，rainWrap = 滤镜强度(0-1)，
+	// rainDustTint = 是否沙尘主导（褐而非灰）。供 ApplyFog 开真实视距雾 + 后处理灰化。
+	public float rainVisM = 1e9f;   // 当前有效水平能见度(米)，HUD 读取展示
+	public bool rainVisTornado;     // 当前能见度是否由龙卷沙幕主导（HUD 标签用）
+	private float rainWrap;
+
+	// 最近龙卷预警数据（CheckDebrisImpacts 逐帧算，供 WeatherAudio 起播预警曲）：
+	// nearestTornadoEta = 最近"逼近中"龙卷的抵达剩余现实秒（-1 = 无逼近中的龙卷）。
+	public static float nearestTornadoEta = -1f;
+	public static float nearestTornadoDistM = -1f;
+	// 该"逼近中"龙卷的核半径（米，-1 = 无）：音频层用它选常规曲/大尺度备选曲。
+	public static float nearestTornadoCoreM = -1f;
+	// 该龙卷的现实移速（米/现实秒）：音频层用它估算遭遇时长，决定曲子是否提速。
+	public static float nearestTornadoSpeedReal = -1f;
+
+	private void CheckDebrisImpacts()
+	{
+		tornadoObscure = 0f;
+		nearestTornadoEta = -1f;
+		nearestTornadoDistM = -1f;
+		nearestTornadoCoreM = -1f;
+		nearestTornadoSpeedReal = -1f;
+		if (systems.Count == 0)
+		{
+			return;
+		}
+		try
+		{
+			GameManager gm = GameManager.main;
+			List<Rocket> rockets = (gm != null) ? gm.rockets : null;
+			for (int si = 0; si < systems.Count; si++)
+			{
+				WeatherSystem s = systems[si];
+				if (s == null || !s.active || s.planet == null)
+				{
+					continue;
+				}
+				// ① 能见度：相机（玩家）离任一龙卷核心多近、是否在云层之下
+				if (s.tornadoes.Count > 0)
+				{
+					try
+					{
+						Location cam = GetPlayerLocation();
+						if (cam != null && (Object)cam.planet == (Object)s.planet)
+						{
+							s.ToStormFrame(cam.position, out double cs, out double ch);
+							double camAng = cam.position.AngleRadians;
+							double pr = cam.planet.Radius;
+							for (int ti = 0; ti < s.tornadoes.Count; ti++)
+							{
+								WeatherSystem.FxInst fx = s.tornadoes[ti];
+								if (fx.strength <= 0.15)
+								{
+									continue;
+								}
+								// ① 龙卷预警 ETA（与 tornadoObscure 开关无关）：龙卷锚在风暴的
+								// 切向偏移上、随风暴整体向 +角 移动 → 玩家在西侧就是逼近中。
+								// 供 WeatherAudio 在抵达前 N 现实秒起播预警曲。
+								// 计时基准取**漏斗边缘**（扣掉核半径）：风暴移速被 ×0.35 缩放到
+								// 4-6 m/s，"距中心 15 秒"只等于 60-90m（那时漏斗早罩住你了）——
+								// 扣掉核半径后，"到达"= 漏斗壁碰到你，15 秒 ≈ 230m 外，才是想要的预警量。
+								double offM = WeatherSystem.WrapPi(s.centerAngle + fx.sOff * s.Rmax / pr - camAng) * pr;
+								double absM = Math.Abs(offM);
+								if (nearestTornadoDistM < 0f || absM < nearestTornadoDistM)
+								{
+									nearestTornadoDistM = (float)absM;
+								}
+								if (offM < 0.0 && s.moveSpeed > 0.5)
+								{
+									double coreM = s.TornadoCoreR(fx);
+									double spanM = absM - coreM;
+									float warp = Mathf.Max(timeScaleReal, 0.01f);
+									// 换算成**现实秒**（÷时间加速倍率）：HUD 倒计时与预警曲都按
+									// 玩家真实感受到的时间走，不看时间加速。
+									float eta = (float)(Math.Max(0.0, spanM) / s.moveSpeed / warp);
+									if (nearestTornadoEta < 0f || eta < nearestTornadoEta)
+									{
+										nearestTornadoEta = eta;
+										nearestTornadoCoreM = (float)coreM;   // 最紧迫的那个决定用哪首曲子
+										nearestTornadoSpeedReal = (float)(s.moveSpeed / warp);
+									}
+								}
+								if (!TyphoonConfig.I.tornadoObscure)
+								{
+									continue;
+								}
+								double dx = cs - fx.sOff * s.Rmax;
+								// 判定半径 = 核半径×4（碎屑云比冷凝漏斗宽；原 Rmax×0.55≈2km
+								// 与真正能卷人的风场对不上）。垂直尺度同风场，1.6 次幂衰减。
+								float rad = (float)(s.TornadoCoreR(fx) * 4.0);
+								float fh = (float)WeatherSystem.Clamp01(1.0 - ch / Math.Max(s.Hbase * 1.2, 1.0));
+								double dT = WeatherSystem.Clamp01(Math.Abs(dx) / rad);
+								float fd = 1f - (float)Math.Pow(dT, 1.6);
+								float f = (float)(fd * fh * Math.Min(1.0, fx.strength));
+								if (f > tornadoObscure)
+								{
+									tornadoObscure = f;
+								}
+							}
+						}
+					}
+					catch
+					{
+					}
+				}
+				// ② 撞击判定
+				if (rockets == null || s.debris.Count == 0)
+				{
+					continue;
+				}
+				for (int di = s.debris.Count - 1; di >= 0; di--)
+				{
+					WeatherSystem.DebrisInst d = s.debris[di];
+					if (!d.airborne || Math.Abs(d.vs) < 10.0)
+					{
+						continue;   // 没被刮起来 / 几乎静止的不参与
+					}
+					double R = s.planet.Radius;
+					double ang = s.centerAngle + d.s / R;
+					Double2 dGlobal = new Double2(Math.Cos(ang) * (R + d.h), Math.Sin(ang) * (R + d.h));
+					Vector2 dWorld = WorldView.ToLocalPosition(dGlobal);
+					Vector2 dVel = new Vector2((float)((0.0 - Math.Sin(ang)) * d.vs + Math.Cos(ang) * d.vh),
+						(float)(Math.Cos(ang) * d.vs + Math.Sin(ang) * d.vh));
+					for (int ri = 0; ri < rockets.Count; ri++)
+					{
+						Rocket r = rockets[ri];
+						if (r == null || r.rb2d == null || r.partHolder == null || (Object)r.location == null)
+						{
+							continue;
+						}
+						if ((Object)r.location.Value.planet != (Object)s.planet)
+						{
+							continue;
+						}
+						Vector2 rc = r.rb2d.worldCenterOfMass;
+						float hitR = RocketHitRadius(r) + (float)d.size;
+						if ((dWorld - rc).sqrMagnitude > hitR * hitR)
+						{
+							continue;
+						}
+						// 相对速度 → 是否致命
+						Vector2 rVel = r.rb2d.linearVelocity;
+						double rel = (dVel - rVel).magnitude;
+						Vector2 dir = (rVel - dVel).normalized;
+						if (TyphoonConfig.I.debrisHurtsRockets && rel >= DebrisLethalSpeed)
+						{
+							Msg((d.kind == 1 ? "被卷起的树木" : "被卷起的石块") + "砸中 " + rocketName(r) + "（相对速度 " + rel.ToString("0") + " m/s）→ 解体");
+							RocketManager.DestroyRocket(r, DestructionReason.RocketCollision);
+							s.debris.RemoveAt(di);
+							break;
+						}
+						// 低速：只推挤（让玩家感到"被东西撞了"）
+						try
+						{
+							r.rb2d.AddForce(dir * (float)(0.5 * d.mass * rel), ForceMode2D.Impulse);
+						}
+						catch
+						{
+						}
+						s.debris.RemoveAt(di);
+						break;
+					}
+				}
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	// 火箭碰撞半径估值（缓存 1s）：取所有部件离质心的最大距离（部件的 Unity 世界坐标）。
+	private Rocket hitRocket;
+	private float hitRocketR = 8f;
+	private float hitRocketT = -99f;
+
+	private float RocketHitRadius(Rocket r)
+	{
+		if (r == hitRocket && Time.unscaledTime - hitRocketT < 1f)
+		{
+			return hitRocketR;
+		}
+		hitRocket = r;
+		hitRocketT = Time.unscaledTime;
+		hitRocketR = 8f;
+		try
+		{
+			Vector2 c = r.rb2d.worldCenterOfMass;
+			List<Part> parts = r.partHolder.parts;
+			float max2 = 0f;
+			for (int i = 0; i < parts.Count; i++)
+			{
+				if (parts[i] == null)
+				{
+					continue;
+				}
+				Vector2 p = parts[i].transform.position;
+				float dd = (p - c).sqrMagnitude;
+				if (dd > max2)
+				{
+					max2 = dd;
+				}
+			}
+			if (max2 > 1f)
+			{
+				hitRocketR = (float)Math.Sqrt(max2);
+			}
+		}
+		catch
+		{
+		}
+		return hitRocketR;
+	}
+
+	private static string rocketName(Rocket r)
+	{
+		try
+		{
+			PlayerController pc = PlayerController.main;
+			if ((Object)pc != (Object)null && (Object)(object)pc.player.Value == (Object)(object)r && r.stats != null)
+			{
+				return "你的" + r.rocketName;
+			}
+			return r.rocketName;
+		}
+		catch
+		{
+			return "火箭";
+		}
+	}
+
+	// 世界时间推进（游戏秒）。自然生成频率按**游戏时间**计时（用户要求）：时间加速
+	// 倍率越高，游戏时间走得越快 → 风暴生成/演化同步快进，与 mod 的能量制生命周期、
+	// 移动、升级同一套"时间加速=快进等待"语义。原实现用 Time.deltaTime（现实秒）计时，
+	// 于是 1000× 加速下"每 30-70 现实秒一个风暴"= 13-28 游戏小时一个，与现实节奏割裂。
+	private double AdvanceGameClock()
+	{
+		WorldTime val = WorldTime.main;
+		if ((Object)val == (Object)null)
+		{
+			gameDt = 0.0;
+			return 0.0;
+		}
+		double worldTime = val.worldTime;
+		if (double.IsNaN(lastWorldTime))
+		{
+			lastWorldTime = worldTime;
+			gameDt = 0.0;
+			return 0.0;
+		}
+		double dt = worldTime - lastWorldTime;
+		lastWorldTime = worldTime;
+		if (dt < 0.0)
+		{
+			dt = 0.0;   // 重进存档/换星球世界时间归零：不推进（等下一帧重新建立基准）
+		}
+		else if (dt > 30.0)
+		{
+			dt = 30.0;
+		}
+		gameDt = dt;
+		// 时间加速倍率（游戏秒/现实秒）：预警曲的提前量是"现实秒"口径（用户明确要
+		// "抵达前 15 现实秒"），而 ETA 是用游戏秒算的（距离÷移速）→ 必须换算，
+		// 否则 1000× 加速下 15 游戏秒 = 0.015 现实秒，音乐会等到龙卷贴脸才响。
+		float rdt = Time.unscaledDeltaTime;
+		if (dt > 0.0 && rdt > 1e-5f)
+		{
+			timeScaleReal = Mathf.Clamp((float)(dt / rdt), 0.02f, 100000f);
+		}
+		return dt;
+	}
+
+	private double gameDt;
+
+	// 游戏秒 / 现实秒（= SFS 时间加速倍率）。1× 时 ≈ 1。
+	public static float timeScaleReal = 1f;
 
 	// fix — 飞行场景边界检测：WorldView.main 只在飞行视图存在。从飞行场景
 	// （WorldView.main != null）切到建造/主菜单（== null）时，清空所有天气系统——
@@ -271,6 +542,7 @@ public class TyphoonManager : MonoBehaviour
 	// 按 category 放大（浮尘轻、特强重）。SFS 后处理无雾效，用饱和/对比/亮度/B 通道实现。
 	private float DustFactor()
 	{
+		dustObscure = 0f;
 		if (!pValid)
 		{
 			return 0f;
@@ -313,14 +585,129 @@ public class TyphoonManager : MonoBehaviour
 					best = v;
 				}
 			}
+			dustObscure = (float)best;
 			return (float)best;
 		}
 		catch
 		{
+			dustObscure = 0f;
 			return 0f;
 		}
 	}
 
+	// 逐型"被云/雨包裹"能见度（对标现实）：玩家在任一风暴的雨幕/云体内时，
+	// 取所有包裹现象中最差（最小）的水平能见度 rainVisM（米），并算滤镜强度 rainWrap。
+	// 台风风眼内无雨→不包裹；云顶之上→不在云中；沙尘暴走 GB/T 20480（DustFactor 强度）。
+	private void ComputeRainVisibility()
+	{
+		rainVisM = 1e9f;
+		rainWrap = 0f;
+		rainVisTornado = false;
+		if (!pValid)
+		{
+			return;
+		}
+		try
+		{
+			Location pl = GetPlayerLocation();
+			if (pl == null || pl.planet == null)
+			{
+				return;
+			}
+			double bestVis = 1e9;
+			float bestWrap = 0f;
+			// 沙尘暴：DustFactor 强度 → GB/T 20480 能见度（浮尘/扬沙 ~8km → 特强 <200m）
+			float dust = DustFactor();
+			if (dust > 0.02f)
+			{
+				double dv = 8000.0 * (1.0 - 0.975 * (double)dust);   // dust=1 → 200m
+				if (dv < bestVis)
+				{
+					bestVis = dv;
+				}
+				bestWrap = Mathf.Max(bestWrap, dust);
+			}
+			// 龙卷沙幕能见度（对标现实）：玩家在漏斗/碎屑区 tornadoObscure(0-1)。
+			// 龙卷碎屑云能见度可骤降至近 0 → obsc=1 ~10m、obsc=0.5 ~410m（HUD 显示 + 滤镜强度）。
+			float tor = (TyphoonConfig.I.tornadoObscure ? tornadoObscure : 0f);
+			if (tor > 0.02f)
+			{
+				double tv = 800.0 * (1.0 - 0.9875 * (double)tor);   // ~10m..800m（贴现实：漏斗内碎屑云能见度数米级）
+				if (tv < bestVis)
+				{
+					bestVis = tv;
+					rainVisTornado = true;
+				}
+				bestWrap = Mathf.Max(bestWrap, tor);
+			}
+			if (TyphoonConfig.I.rainObscure)
+			{
+				for (int i = 0; i < systems.Count; i++)
+				{
+					WeatherSystem s = systems[i];
+					if (s == null || !s.active || s.planet == null || (Object)s.planet != (Object)pl.planet)
+					{
+						continue;
+					}
+					if (s.type == StormType.DustStorm)
+					{
+						continue;   // 已处理
+					}
+					double da = s.centerAngle - pl.position.AngleRadians;
+					while (da > Math.PI)
+					{
+						da -= Math.PI * 2.0;
+					}
+					while (da < -Math.PI)
+					{
+						da += Math.PI * 2.0;
+					}
+					double ro = Math.Abs(da) * s.planet.Radius / s.Rmax;   // 归一化水平半径
+					// 台风风眼：无雨、可见蓝天 → 不包裹（风眼内反而看得远）
+					double eyeRT = (s.type == StormType.Typhoon) ? WeatherSystem.TyphoonEyeR(s.category) : 0.0;
+					if (eyeRT > 0.05 && ro < eyeRT)
+					{
+						continue;
+					}
+					if (pl.Height > s.Htop * 1.15)   // 云顶之上：不在云中
+					{
+						continue;
+					}
+					double wrapFrac = 1.8;   // 雨幕外缘 ~1.8 Rmax
+					if (ro > wrapFrac)
+					{
+						continue;
+					}
+					double hSpan = Math.Max(s.Htop - s.Hbase, 1.0);
+					double hF = WeatherSystem.Clamp01(1.0 - Math.Max(0.0, pl.Height - s.Hbase) / hSpan);   // 云底以下最浓
+					double rF = 1.0 - ro / wrapFrac;   // 中心最浓
+					float wrap = (float)(rF * (0.5 + 0.5 * hF));
+					double baseV = WeatherSystem.BaseVisM(s.type, s.category);
+					if (baseV < 0.0)
+					{
+						continue;
+					}
+					double visHere = baseV * (0.6 + 0.4 * (double)wrap);   // 边缘略清
+					if (visHere < bestVis)
+					{
+						bestVis = visHere;
+					}
+					bestWrap = Mathf.Max(bestWrap, wrap);
+				}
+			}
+			if (bestVis < 1e8)
+			{
+				rainVisM = (float)bestVis;
+				rainWrap = bestWrap;
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	// 真实视距雾：rainVisM < 12km 时开指数雾，密度 = 3.9/rainVisM（rainVisM 处透射 ~2%，
+	// 即"游戏里只能看见这个数"）。雾色：沙尘昏黄 / 阴雨冷灰。SFS 自身无雾效，关时还原。
 	// 近距风暴变灰：风暴占据整个天空时画面变灰。
 	// 全屏灰化大幅减弱（饱和度 0.25→0.55、对比 0.7→0.88、亮度 0.62→0.82）：
 	// 全屏后处理会把龙卷卷尘环/漏斗等附属现象一起拉成灰暗（用户反馈"因灰色滤镜看不见
@@ -330,7 +717,17 @@ public class TyphoonManager : MonoBehaviour
 	{
 		float f = ProximityFactor();
 		float dust = DustFactor();   // 沙尘暴能见度滤镜
-		float g0 = Mathf.Max(f, dust);
+		// 龙卷内部能见度骤降（用户要求）：obsc = 玩家在漏斗沙尘区的程度（0-1，
+		// CheckDebrisImpacts 逐帧算）。原来只有"近距风暴变灰"，进龙卷反而还看得清；
+		// 现在把它作为最强的滤镜输入 —— 沙褐 + 压暗 + 高对比 = 沙幕糊脸。
+		float obsc = (TyphoonConfig.I.tornadoObscure ? tornadoObscure : 0f);
+		// 逐型云/雨包裹能见度（对标现实）：算有效能见度（rainVisM，供 HUD/滤镜映射）。
+		// SFS 原生不支持雾 → 用后处理滤镜颜色/强度表达"看不清"，能见度越低灰得越狠。
+		ComputeRainVisibility();
+		// 滤镜强度：空间包裹(rainWrap) + 真实能见度映射(visFactor)。暴雨<1km → visFactor~0.83。
+		float visFactor = (rainVisM < 12000f) ? Mathf.Clamp01(1f - rainVisM / 6000f) : 0f;
+		float rw = Mathf.Max(rainWrap, visFactor);   // 云/雨灰化强度（已在 ComputeRainVisibility 内按开关判定）
+		float g0 = Mathf.Max(f, Mathf.Max(dust, Mathf.Max(obsc, rw)));
 		if (g0 < 0.02f)
 		{
 			return;
@@ -402,12 +799,17 @@ public class TyphoonManager : MonoBehaviour
 			catch
 			{
 			}
-			float g2 = Mathf.Clamp01(g + (float)hDark * 0.6f);   // 云中：灰度再叠加
+			float g2 = Mathf.Clamp01(g + (float)hDark * 0.6f + obsc * 0.9f + rw * 0.8f);   // 云中/龙卷沙幕/雨包裹再叠灰
 			// 滤镜去绿（用户：太绿了）：原 _Multiplier 三通道统一降亮后 G 相对
 			// 最高（人眼对绿最敏感）→ 画面发绿。沙尘主导时 R 抬 / G 压 / B 大压 → 明确
 			// 黄褐色（沙尘暴昏黄）；饱和度沙尘时保留沙黄色相（0.42 而非台风灰化 0.15）。
-			float dustBlend = dust / Mathf.Max(g0, 0.01f);
+			float dustBlend = Mathf.Max(dust, obsc) / Mathf.Max(g0, 0.01f);
+			float rainBlend = rw / Mathf.Max(g0, 0.01f);   // 雨/云包裹占比
 			float satTarget = Mathf.Lerp(0.15f, 0.42f, dustBlend);
+			// 强沙尘暴→更"糊"（饱和再压一点、趋于均匀褐白化），但仍保沙黄相（不灰化）。
+			satTarget = Mathf.Lerp(satTarget, 0.30f, dustBlend * dustBlend);
+			// 雨/云包裹：去饱和更强（冷灰），比台风灰化(0.15)更灰 → 凸显"看不清"
+			satTarget = Mathf.Lerp(satTarget, 0.08f, rainBlend * (1f - dustBlend));
 			m.SetFloat(Shader.PropertyToID("_Saturation"), Mathf.Lerp(1f, satTarget, g2));
 			m.SetFloat(Shader.PropertyToID("_Contrast"), Mathf.Lerp(1f, 0.7f, g2));
 			// 云中更暗 + 偏黄（用户：还是不够暗、加入一些黄色——真实风暴云内
@@ -418,10 +820,13 @@ public class TyphoonManager : MonoBehaviour
 			// 风暴内蓝色天空背景整体被压向暖灰，不再蓝得扎眼。
 			// 沙尘能见度滤镜：沙尘主导时（dustBlend→1）B 通道额外压低 → 昏黄
 			// 天空（现实沙尘暴视觉）+ 亮度再降（沙尘遮挡阳光）；纯台风时 dust=0 零影响。
-			float lum = Mathf.Lerp(1f, 0.62f, g) * (1f - (float)hDark * 0.7f) * (1f - dustBlend * dust * 0.25f);
+			float lum = Mathf.Lerp(1f, 0.62f, g) * (1f - (float)hDark * 0.7f) * (1f - dustBlend * dust * 0.4f) * (1f - obsc * 0.55f) * (1f - rw * 0.45f);
 			float lumR = lum * (1f + dustBlend * dust * 0.14f);    // R 抬 → 黄
 			float lumG = lum * (1f - dustBlend * dust * 0.12f);    // G 压 → 去绿
-			float bLum = lum * (1f - (float)hDark * 0.45f) * (1f - g * 0.28f) * (1f - dustBlend * dust * 0.5f);
+			// 雨包裹时保留 B 通道（冷灰，不压暖）；沙尘仍压 B（昏黄）。
+			float bWarm = 1f - (float)hDark * 0.45f - g * 0.28f * (1f - rainBlend * 0.85f)
+				- dustBlend * dust * 0.5f - obsc * 0.35f;
+			float bLum = lum * Mathf.Clamp(bWarm, 0.05f, 1.2f) * (1f + rainBlend * 0.05f);
 			m.SetVector(Shader.PropertyToID("_Multiplier"), new Vector4(lumR, lumG, bLum, 1f));
 		}
 		catch
@@ -456,21 +861,8 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	private void AdvanceSystems()
+	private void AdvanceSystems(double dt)
 	{
-		WorldTime val = WorldTime.main;
-		if ((Object)val == (Object)null)
-		{
-			return;
-		}
-		double worldTime = val.worldTime;
-		if (double.IsNaN(lastWorldTime))
-		{
-			lastWorldTime = worldTime;
-			return;
-		}
-		double dt = worldTime - lastWorldTime;
-		lastWorldTime = worldTime;
 		for (int i = systems.Count - 1; i >= 0; i--)
 		{
 			WeatherSystem sys = systems[i];
@@ -488,26 +880,33 @@ public class TyphoonManager : MonoBehaviour
 		}
 	}
 
-	// ===== 自然生成：有大气行星上，随机时间在玩家附近触发单体 =====
-	private void NaturalSpawn()
+	// ===== 自然生成：有大气行星上，按**游戏时间**间隔在玩家附近触发对流系统 =====
+	// 计时口径 = 世界时间（gameDt）：时间加速倍率越高，游戏时间推进越快 → 生成同步快进
+	// （与生命周期/移动/升级同一套语义）。间隔与距离均由设置页给出（间隔单位：游戏秒，
+	// 设置页以"游戏分钟"呈现）；默认 1-3 游戏小时一个对流系统——现实一个 ~60km 半径的
+	// 区域内，强对流生成事件就是这个量级（一天数次）。
+	private void NaturalSpawn(double gameDt)
 	{
 		if (!TyphoonConfig.I.naturalSpawn || systems.Count >= MaxSystems)
 		{
 			return;
 		}
-		spawnTimer -= Time.deltaTime;
+		if (gameDt <= 0.0)
+		{
+			return;   // 暂停/未进世界：游戏时间不推进 → 不生成
+		}
+		spawnTimer -= (float)gameDt;
 		if (spawnTimer > 0f)
 		{
 			return;
 		}
-		// 间隔/距离可调（设置页）：30-70s → min-max；12-62km → 12km~distKm
-		spawnTimer = TyphoonConfig.I.naturalSpawnMinSec + UnityEngine.Random.Range(0f, Mathf.Max(1f, TyphoonConfig.I.naturalSpawnMaxSec - TyphoonConfig.I.naturalSpawnMinSec));
+		// 下一次尝试间隔（游戏秒）：min ~ max 均匀随机。计数器按游戏时间走，
+		// 因此这里不再叠加"额外概率门"——间隔本身就是希望玩家看到的生成节奏。
+		float minSec = Mathf.Max(1f, TyphoonConfig.I.naturalSpawnMinSec);
+		float maxSec = Mathf.Max(minSec + 1f, TyphoonConfig.I.naturalSpawnMaxSec);
+		spawnTimer = UnityEngine.Random.Range(minSec, maxSec);
 		Location loc = GetPlayerLocation();
 		if (loc == null || (Object)loc.planet == (Object)null || !loc.planet.HasAtmospherePhysics)
-		{
-			return;
-		}
-		if (UnityEngine.Random.value > 0.6f)
 		{
 			return;
 		}
@@ -846,7 +1245,9 @@ public class TyphoonManager : MonoBehaviour
 	}
 
 	// silent=true：自然生成调用不弹 Msg（用户：自然生成风暴提示删除；手动保留）。
-	public WeatherSystem SpawnSystem(StormType type, Location at, double leadMeters, int catBoost, bool silent = false)
+	// mature=true：手动召唤（指挥中心）直接以成熟期出现（stage=1, energy=80），
+	// 召唤后即可加附属现象/看到自然生成；自然生成保持发展期（realistic）。
+	public WeatherSystem SpawnSystem(StormType type, Location at, double leadMeters, int catBoost, bool silent = false, bool mature = false)
 	{
 		if (at == null || (Object)at.planet == (Object)null)
 		{
@@ -885,6 +1286,11 @@ public class TyphoonManager : MonoBehaviour
 		double angle = newAngle;
 		sys.seed = UnityEngine.Random.Range(1, 100000);
 		sys.Configure(type, at.planet, angle, catBoost);
+		if (mature)
+		{
+			sys.stage = 1;        // 直接成熟（指挥中心召唤即满编）
+			sys.energy = 80.0;
+		}
 		systems.Add(sys);
 		CreateRenderer(sys);
 		if (!silent)
@@ -1016,6 +1422,7 @@ public class TyphoonManager : MonoBehaviour
 		if (!any)
 		{
 			diagPValid = false;
+			diagWindSum = 0.0;   // 离所有风暴：风速归零，风声随之静音
 			return;
 		}
 		Double2 val2 = playerLocation.velocity - wind;
@@ -1101,6 +1508,9 @@ public class TyphoonManager : MonoBehaviour
 		{
 			return;
 		}
+		// 龙卷预警（ETA + 到最近龙卷的距离，CheckDebrisImpacts 本帧已算）→ 音频层。
+		// 两个都要：ETA 只表示"逼近中"（龙卷越过玩家后恒 -1），距离用于"抵达后继续播"。
+		audio.SetTornadoAlert(nearestTornadoEta, nearestTornadoDistM, nearestTornadoCoreM);
 		try
 		{
 			Location pl = GetPlayerLocation();
@@ -1109,7 +1519,12 @@ public class TyphoonManager : MonoBehaviour
 				audio.targetWind = 0f;
 				return;
 			}
-			float wind = 0f;
+			if (!pValid)   // 玩家不在任何风暴风场内（或风场未采样）→ 风声静音
+			{
+				audio.targetWind = 0f;
+				return;
+			}
+			double nearestWindFall = 0.0;   // 最近风暴的距离收束（保留 2.5Rmax 边界）
 			for (int i = 0; i < systems.Count; i++)
 			{
 				WeatherSystem s = systems[i];
@@ -1127,16 +1542,24 @@ public class TyphoonManager : MonoBehaviour
 					da += Math.PI * 2.0;
 				}
 				double dist = Math.Abs(da) * pl.planet.Radius;
-				double reach = Math.Max(s.Rmax * 2.5, 1.0);   // 影响半径 2.5 Rmax
-				double dRatio = dist / reach;
-				double falloff = 1.0 / (1.0 + dRatio * dRatio);   // 平方衰减：1Rmax 内 ~0.86，2Rmax ~0.25
-				double vf = Math.Min(s.Vmax / 45.0, 1.0);     // 风速强度 0-1（45 m/s 满）
-				wind += (float)(vf * falloff);
-				// 雷声：lightningBursts 新增 → 触发（音量按距离衰减）
+				// 影响半径（平方衰减）：风声随风暴尺度 2.5Rmax，但设绝对上限 40km
+				// （巨大系统风场不会延伸到上百 km 外仍能听见）；雷声独立绝对上限 22km
+				// （现实雷声最远 ~16-25km 可闻，与风暴尺度无关，避免大风暴雷声传遍全行星）。
+				double windReach = Math.Min(s.Rmax * 2.5, 40000.0);
+				double windFall = 1.0 / (1.0 + (dist / windReach) * (dist / windReach));
+				double thReach = Math.Min(s.Rmax * 2.5, 22000.0);
+				double thFall = 1.0 / (1.0 + (dist / thReach) * (dist / thReach));
+				// 风声不再用"到中心距离×整体Vmax"（风眼中心 dist≈0 反而最响，错误）；
+				// 改由玩家当地真实风速驱动（见函数末），这里只记最近风暴的距离收束。
+				if (windFall > nearestWindFall)
+				{
+					nearestWindFall = windFall;
+				}
+				// 雷声：lightningBursts 新增 → 触发（音量按距离衰减，独立上限）
 				int cur = s.lightningBursts.Count;
 				if (thunderCount.TryGetValue(s, out int prev) && cur > prev)
 				{
-					audio.PlayThunder((float)falloff);
+					audio.PlayThunder((float)thFall, Mathf.Clamp((float)(da / 0.7), -1f, 1f));
 				}
 				thunderCount[s] = cur;
 			}
@@ -1145,244 +1568,33 @@ public class TyphoonManager : MonoBehaviour
 			{
 				thunderCount.Clear();
 			}
-			audio.targetWind = Mathf.Clamp01(wind);
+			// 风声 = 玩家当地真实风速（diagWindSum，含风眼 gain≈0.06 压静）+ 最近风暴距离收束。
+			// 风眼内 localWind≈0.06·Vmax → 接近静音；眼壁 localWind 高 → 满响。
+			double localWind = diagWindSum / 45.0;   // 45 m/s 满音量
+			audio.targetWind = Mathf.Clamp01((float)(localWind * nearestWindFall));
 		}
 		catch
 		{
 		}
 	}
 
-	// ===== F6 气象菜单（ 横版 · 可拖动 · 深空色系） =====
+	// ===== F6 气象菜单：绘制已迁到 TyphoonMenuUi（全面革新版 · SpaceXHUD 同色系） =====
 	private void OnGUI()
 	{
-		// fix — 菜单仅在飞行场景显示（WorldView.main null = 建造/主菜单）；
-		// 防止 menuOpen 状态跨场景残留导致建造页面也弹菜单。
+		// 菜单仅在飞行场景显示（WorldView.main null = 建造/主菜单），防跨场景残留
 		if (WorldView.main == null)
 		{
 			return;
 		}
-		if (!menuOpen || !TyphoonConfig.I.hud)
-		{
-			return;
-		}
-		float bw = 680f;
-		float bh = 390f;   // 7 类型网格 3 行修复后内容到底 ~422px，360 太紧 → 390
-		float baseX = ((float)Screen.width - bw) * 0.5f;
-		float baseY = 70f;
-		Rect w = new Rect(baseX + menuOffset.x, baseY + menuOffset.y, bw, bh);
-		Event e = Event.current;
-		// 拖动：按住标题栏移动。
-		// 修复关闭按钮无响应（用户：指挥中心关闭按钮无法发挥作用）：拖动热区
-		// 原覆盖整个标题栏（含右上角关闭按钮），MouseDown 先命中热区 e.Use() 消费事件，
-		// 按钮永远收不到点击。热区排除右侧 80px（关闭按钮区域）。
-		if (e.type == EventType.MouseDown && e.button == 0 && new Rect(w.x, w.y, bw - 80f, 34f).Contains(e.mousePosition))
-		{
-			menuDragging = true;
-			menuGrabDelta = e.mousePosition - new Vector2(w.x, w.y);
-			e.Use();
-		}
-		else if (e.type == EventType.MouseDrag && menuDragging)
-		{
-			menuOffset = e.mousePosition - menuGrabDelta - new Vector2(baseX, baseY);
-			e.Use();
-		}
-		else if (e.type == EventType.MouseUp && menuDragging)
-		{
-			menuDragging = false;
-			e.Use();
-		}
-		// 深空色系背景（ 优化#2 — GUIStyle 缓存）
-		if (mBox == null)
-		{
-			mBox = new GUIStyle(GUI.skin.box);
-			mBox.alignment = TextAnchor.UpperLeft;
-			mBox.fontSize = 12;
-			mBox.font = CnFont();   // 中文字体（原方块）
-			mBox.normal.background = DeepSpaceTex();
-			mBox.border = new RectOffset(8, 8, 8, 8);
-		}
-		GUIStyle box = mBox;
-		GUI.Box(w, GUIContent.none, box);
-		float x = w.x + 14f;
-		float y = w.y + 10f;
-		if (mTitle == null)
-		{
-			mTitle = new GUIStyle(GUI.skin.label);
-			mTitle.fontSize = 17;
-			mTitle.fontStyle = FontStyle.Bold;
-			mTitle.font = CnFont();
-			mTitle.normal.textColor = new Color(0.72f, 0.86f, 1f);
-		}
-		GUIStyle title = mTitle;
-		GUI.Label(new Rect(x, y, 420f, 24f), "◆ 气象指挥中心", title);
-		if (mSmall == null)
-		{
-			mSmall = new GUIStyle(GUI.skin.label);
-			mSmall.fontSize = 11;
-			mSmall.font = CnFont();
-			mSmall.normal.textColor = new Color(0.52f, 0.64f, 0.8f);
-		}
-		GUIStyle small = mSmall;
-		GUI.Label(new Rect(x + 170f, y + 8f, 420f, 18f), "点击类型即刻召唤 · 拖标题栏可移动", small);
-		if (mBtn == null)
-		{
-			mBtn = new GUIStyle(GUI.skin.button);
-			mBtn.fontSize = 12;
-			mBtn.font = CnFont();
-			mBtn.normal.textColor = new Color(0.82f, 0.91f, 1f);
-		}
-		GUIStyle btn = mBtn;
-		if (GUI.Button(new Rect(w.x + w.width - 64f, y, 50f, 22f), "关闭", btn))
-		{
-			menuOpen = false;
-			return;
-		}
-		y += 32f;
-		// 类型网格：3 列 × 3 行（7 类型 ceil(7/3)=3 行，按钮含名称 + 简介两行）——（终审🟢-11）注释修正
-		float cw = 208f;
-		float ch = 52f;
-		float gapX = 10f;
-		int n = WeatherSystem.Spec.Length;
-		for (int i = 0; i < n; i++)
-		{
-			int col = i % 3;
-			int row = i / 3;
-			float bx = x + col * (cw + gapX);
-			float by = y + row * (ch + 8f);
-			bool sel = i == selectedType;
-			// 优化#2 — tb 两态缓存（循环内不再每帧 new）
-			if (mTbSel == null)
-			{
-				mTbSel = new GUIStyle(GUI.skin.box);
-				mTbSel.fontSize = 13;
-				mTbSel.fontStyle = FontStyle.Bold;
-				mTbSel.alignment = TextAnchor.MiddleCenter;
-				mTbSel.font = CnFont();
-				mTbSel.normal.textColor = new Color(0.55f, 0.86f, 1f);
-			}
-			if (mTb == null)
-			{
-				mTb = new GUIStyle(GUI.skin.button);
-				mTb.fontSize = 13;
-				mTb.fontStyle = FontStyle.Bold;
-				mTb.alignment = TextAnchor.MiddleCenter;
-				mTb.font = CnFont();
-				mTb.normal.textColor = new Color(0.85f, 0.92f, 1f);
-			}
-			GUIStyle tb = sel ? mTbSel : mTb;
-			// 类型按钮名称+简介预拼接缓存（原每帧每按钮拼接字符串）
-			if (GUI.Button(new Rect(bx, by, cw, ch), SpecLabel(i), tb))
-			{
-				selectedType = i;
-				Location loc = GetPlayerLocation();
-				if (loc != null && loc.planet != null)
-				{
-					// F6 召唤偏移视距自适应（用户：放台风从左到右逐渐消失——原固定
-					// 60km 偏移超出 SFS 相机可视距离（far clip），风暴近侧可见、远侧被裁 →
-					// 渐变消失）。保证召唤的风暴落在可视范围内（下限 4km、上限视距×0.55，
-					// 不超配置值）。
-					double leadF6 = TyphoonConfig.I.spawnLeadDistanceMeters;
-					try
-					{
-						double vdF6 = ((Obs<float>)(object)WorldView.main.viewDistance).Value;
-						leadF6 = Math.Min(leadF6, Math.Max(4000.0, vdF6 * 0.55));
-					}
-					catch
-					{
-					}
-					SpawnSystem((StormType)i, loc, leadF6, 0);
-				}
-			}
-		}
-		// 修复沙尘暴与下方按钮重叠（用户：沙尘暴选项和下方的按钮重叠了）：
-		// 网格按 col=i%3, row=i/3 排列，7 类型 = 3 行，但 y 只推进 2 行高度（2*(ch+8)）——
-		// 第 3 行（沙尘暴）正好压到分隔线/操作按钮上。改按实际行数推进（ceil(n/3)）。
-		y += ((n + 2) / 3) * (ch + 8f) + 12f;
-		// 分隔线（ 优化#2 — GUIStyle + GUIStyleState 缓存，原每帧 new 两个）
-		if (mLine == null)
-		{
-			mLine = new GUIStyle(GUI.skin.label);
-			mLine.font = CnFont();
-			mLine.normal.background = SolidLine();
-		}
-		GUI.Label(new Rect(x, y - 8f, bw - 28f, 2f), "", mLine);
-		// 操作行（作用于底部监控面板选中的系统）—— 两行：行1 现象添加，行2 全局操作
-		float opW = 122f;
-		float opGap = 8f;
-		if (GUI.Button(new Rect(x, y, opW, 24f), "加龙卷", btn))
-		{
-			AddPhenomenon(1);
-		}
-		if (GUI.Button(new Rect(x + (opW + opGap), y, opW, 24f), "加下暴", btn))
-		{
-			AddPhenomenon(2);
-		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 2f, y, opW, 24f), "加阵风锋", btn))   //
-		{
-			AddPhenomenon(3);
-		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 3f, y, opW, 24f), "加闪电", btn))     //
-		{
-			AddPhenomenon(4);
-		}
-		y += 32f;
-		if (GUI.Button(new Rect(x, y, opW, 24f), "清除附属", btn))
-		{
-			if (selected != null && selected.active)
-			{
-				selected.ClearPhenomena();
-				Msg("已清除 " + WeatherSystem.TypeName(selected.type) + " 的附属现象");
-			}
-			else
-			{
-				Msg("请先在底部监控面板选中一个风暴");
-			}
-		}
-		if (GUI.Button(new Rect(x + (opW + opGap), y, opW, 24f), "全部分散", btn))
-		{
-			DespawnAll();
-		}
-		if (GUI.Button(new Rect(x + (opW + opGap) * 2f, y, opW, 24f), "风眼对准", btn))
-		{
-			if (selected != null && selected.active)
-			{
-				Location loc = GetPlayerLocation();
-				if (loc != null)
-				{
-					selected.centerAngle = loc.position.AngleRadians;
-					Msg("风眼已对准当前位置");
-				}
-			}
-		}
-		y += 32f;
-		// 底部信息：选中系统状态（ — StringBuilder 复用，避免每帧多次字符串拼接）
-		StringBuilder sb = s_sb;
-		sb.Clear();
-		if (selected != null && selected.active)
-		{
-			sb.Append("已选中  ").Append(WeatherSystem.TypeName(selected.type)).Append("  ").Append(WeatherSystem.StrengthName(selected.type, selected.category));
-			sb.Append("  [").Append(selected.stage == 0 ? "发展" : (selected.stage == 1 ? "成熟" : "消散")).Append(']');
-			sb.Append("  峰风 ").Append(selected.Vmax.ToString("0")).Append(" m/s  半径 ").Append((selected.Rmax / 1000.0).ToString("0.##")).Append(" km  云顶 ").Append((selected.Htop / 1000.0).ToString("0.0")).Append(" km");
-			sb.Append("   [F8] 换档 [F7] 解散");
-		}
-		else
-		{
-			sb.Append("未选中系统 — 在底部监控面板点击风暴后，方可添加龙卷 / 下击暴流");
-		}
-		// 优化#2 — infoSt 缓存
-		if (mInfo == null)
-		{
-			mInfo = new GUIStyle(GUI.skin.label);
-			mInfo.fontSize = 12;
-			mInfo.font = CnFont();
-			mInfo.normal.textColor = new Color(0.78f, 0.88f, 1f);
-		}
-		GUIStyle infoSt = mInfo;
-		GUI.Label(new Rect(x, y, bw - 28f, 20f), sb.ToString(), infoSt);
+		TyphoonMenuUi.Draw(this);
 	}
 
+
+
+
 	// 附属现象统一入口：强制基于底部面板选中系统 + 类型检测。
-	private void AddPhenomenon(int kind)
+	// internal（非 private）：由独立类 TyphoonMenuUi 经 main.AddPhenomenon(kind) 调用。
+	internal void AddPhenomenon(int kind)
 	{
 		if (selected == null || !selected.active)
 		{
@@ -1433,6 +1645,11 @@ public class TyphoonManager : MonoBehaviour
 		{
 			Msg("✖ 无法添加闪电风暴");
 		}
+	}
+	else if (kind == 5)   // 清除附属：渐消全部龙卷/下击暴流/阵风锋/闪电风暴
+	{
+		selected.ClearPhenomena();
+		Msg("已对 " + WeatherSystem.TypeName(selected.type) + " 触发附属现象渐消（龙卷/下暴/阵风锋/闪电）");
 	}
 }
 

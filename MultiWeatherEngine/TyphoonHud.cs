@@ -1,4 +1,3 @@
-using System;
 using System.Text;
 using SFS.Variables;
 using SFS.World;
@@ -7,99 +6,44 @@ using Object = UnityEngine.Object;
 
 namespace MultiWeatherEngine;
 
-// HUD 重构：底部"活跃天气系统"面板（F9/点击标题 展开收起、点击行选中）+
-// 左上精简条（选中系统详情 + 玩家飞行数据 + 视距/键位）。
+// ===================== 飞行 HUD（全面革新版 · 与 SpaceXHUD 同色系同布局语言） =====================
+// 三块面板（全部避让 SpaceXHUD 的顶条 80s / 底条 158s，见 UiTheme）：
+//   ①左上「风暴详情卡」：数值 + 进度条 + 风圈刻度尺 + 本地风
+//   ②左下「活跃系统条」：每行 = 强度条 + 能量条 + 距离条 + 现象标签（点击行选中）
+//   ③右上「雷达带」：以玩家为中心的切向雷达，直观看"哪个风暴离你多近、多大"
+// 设计原则：能画成条/尺/芯片的就不写成一长串文本；颜色 = UiTheme（SpaceX 色系）。
 public class TyphoonHud : MonoBehaviour
 {
-	private GUIStyle box;
-
-	private GUIStyle label;
-
-	private GUIStyle small;
-
-	private GUIStyle header;
-
-	// 优化#2 — GUIStyle 缓存（原 OnGUI 每帧 new GUIStyle(GUI.skin.button/box) →
-	// 面板开着就每帧 GC 分配。首次使用时创建，之后复用；样式值固定不变）。
-	private GUIStyle hdrStyle;
-
-	private GUIStyle rowSelStyle;
-
-	private GUIStyle rowStyle;
-
-	private Texture2D bg;
-
-	private Texture2D bar;
-
-	private Texture2D marker;
-
-	// 左下角面板半透明（用户要求）：底部监控面板用半透明底（alpha 0.55，
-	// 透出地表/风暴不遮挡视野），详情/待机面板保持 0.92（信息可读性优先）。
-	private Texture2D bottomBg;
-
-	private GUIStyle bottomBox;
-
-	// HUD 字符串复用（原每帧 OnGUI 多次字符串拼接 + int/double 隐式装箱，
-	// 每次 UI 事件（Layout/Repaint）都跑 → GC 压力翻倍）。复用 StringBuilder 消除。
 	private readonly StringBuilder sb = new StringBuilder(160);
+
+	// 现象标签复用缓冲（原 PhenText 每次调用 new StringBuilder(32)：每帧 1+系统数 次分配）
+	private static readonly StringBuilder phenSb = new StringBuilder(48);
 
 	private bool init;
 
 	private WeatherSystem S => TyphoonManager.main != null ? TyphoonManager.main.selected : null;
 
-	private void Setup()
-	{
-		init = true;
-		// 深空色系：深蓝黑底 + 星云蓝字
-		bg = Solid(new Color(0.016f, 0.024f, 0.05f, 0.92f));
-		bar = Solid(new Color(0.5f, 0.75f, 1f, 0.14f));
-		marker = Solid(new Color(0.72f, 0.86f, 1f));
-		box = new GUIStyle();
-		box.normal.background = bg;
-		box.padding = new RectOffset(12, 12, 10, 10);
-		box.font = TyphoonManager.CnFont();   // 中文字体（原方块）
-		// 底部面板半透明 style（独立于 box，不影响详情/待机）
-		bottomBg = Solid(new Color(0.016f, 0.024f, 0.05f, 0.55f));
-		bottomBox = new GUIStyle(box);
-		bottomBox.normal.background = bottomBg;
-		header = new GUIStyle();
-		header.fontSize = 15;
-		header.fontStyle = (FontStyle)1;
-		header.font = TyphoonManager.CnFont();
-		header.normal.textColor = new Color(0.74f, 0.87f, 1f);
-		label = new GUIStyle();
-		label.fontSize = 13;
-		label.font = TyphoonManager.CnFont();
-		label.normal.textColor = new Color(0.78f, 0.87f, 1f);
-		small = new GUIStyle();
-		small.fontSize = 11;
-		small.font = TyphoonManager.CnFont();
-		small.normal.textColor = new Color(0.52f, 0.64f, 0.8f);
-	}
-
-	private static Texture2D Solid(Color c)
-	{
-		Texture2D val = new Texture2D(1, 1);
-		val.SetPixel(0, 0, c);
-		val.Apply();
-		return val;
-	}
-
 	private void OnGUI()
 	{
 		if (!init)
 		{
-			Setup();
+			init = true;
+			UiTheme.CnFont();   // 预热中文字体（SFS 默认字体无中文字形）
 		}
 		TyphoonManager main = TyphoonManager.main;
-		if (main == null)
+		if (main == null || WorldView.main == null)
 		{
 			return;
 		}
-		// fix — 面板仅在飞行场景显示：WorldView.main 只在飞行视图存在，
-		// 建造页面/主菜单为 null。原条件只查玩家位置+系统数——预生成在进世界时播种
-		// 系统，systems 跨场景残留导致建造页面也画面板（用户反馈"面板哪都能出现"）。
-		if (WorldView.main == null)
+		if (!TyphoonConfig.I.hud)
+		{
+			return;
+		}
+		// 性能：本 HUD 全部是"显式矩形 + GUI.Button"的立即模式绘制（不使用 GUILayout），
+		// Layout 通道不参与任何布局计算 → 直接跳过。OnGUI 每帧要跑 Layout + Repaint 两趟，
+		// 跳过 Layout 等于绘制工作量腰斩（MouseDown/Up 等输入事件照常处理，按钮点击不受影响）。
+		// 原 frameId/frameReady 字段是死代码（frameReady 从未被读），一并移除。
+		if (Event.current != null && Event.current.type == EventType.Layout)
 		{
 			return;
 		}
@@ -107,159 +51,587 @@ public class TyphoonHud : MonoBehaviour
 		{
 			return;
 		}
-		if (TyphoonConfig.I.hud)
-		{
-			DrawBottomPanel(main);
-			DrawTopBar(main);
-		}
-		// F1 参数编辑面板已删除（用户要求：f1 参数编辑菜单删除）。
+		float s = UiTheme.Scale;
+		DrawDetailCard(main, s);
+		DrawStormList(main, s);
+		DrawRadar(main, s);
 	}
 
-	// F1 参数编辑面板已删除（用户要求）。原 DrawWindGainPanel 移除。
-
-	// ===== 底部：活跃天气系统面板（ 左下角 · 缩短 · 可展开收起，点击行选中） =====
-	private void DrawBottomPanel(TyphoonManager main)
+	// ---------------------------------------------------------------- ① 详情卡
+	private void DrawDetailCard(TyphoonManager main, float s)
 	{
-		int n = TyphoonManager.systems.Count;
-		bool exp = TyphoonManager.panelExpanded;
-		// 排版：宽上限 560→640（行文字含 类型/强度/阶段/现象/峰风/半径/云顶/距离
-		// 原 560px 裁掉末尾距离；加宽 + 行文本紧凑化后完整显示）
-		float bw = Mathf.Min((float)Screen.width - 30f, 640f);
-		float bh = exp ? (38f + (float)n * 24f + 8f) : 38f;
-		if (n == 0)
+		float x = UiTheme.Edge * s;
+		float y = UiTheme.TopReserve;
+		float w = 306f * s;
+		WeatherSystem st = S;
+		bool has = st != null && st.active;
+
+		// 行数决定高度（有风暴才有风圈尺/本地风块）
+		float h = (has ? 292f : 74f) * s;
+		UiTheme.PanelBg(new Rect(x, y, w, h), 0.90f);
+
+		// 顶部色条 = 强度色（一眼看出选中的是几级）
+		Color accent = has ? UiTheme.IntensityOf(st.category) : UiTheme.Staging;
+		UiTheme.Fill(new Rect(x, y, w, 3f * s), accent);
+
+		float px = x + 10f * s;
+		float py = y + 9f * s;
+		float iw = w - 20f * s;
+
+		if (!has)
 		{
-			bh = 38f;
+			UiTheme.TextBold(new Rect(px, py, iw, 18f * s), "星程气象", Mathf.RoundToInt(13f * s), UiTheme.Text);
+			UiTheme.DrawText(new Rect(px, py + 22f * s, iw, 16f * s), "未选中系统 · 在左下列表点选或按 [F6] 召唤", Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.6f));
+			return;
 		}
-		float bx = 14f;
-		float by = (float)Screen.height - bh - 14f;
-		Rect panel = new Rect(bx, by, bw, bh);
-		GUI.Box(panel, GUIContent.none, bottomBox);   // 半透明底（用户要求）
-		float x = bx + 10f;
-		float y = by + 6f;
-		// 优化#2 — GUIStyle 缓存（首次创建，样式固定）
-		if (hdrStyle == null)
-		{
-			hdrStyle = new GUIStyle(GUI.skin.button);
-			hdrStyle.alignment = TextAnchor.MiddleLeft;
-			hdrStyle.fontSize = 13;
-			hdrStyle.fontStyle = FontStyle.Bold;
-			hdrStyle.font = TyphoonManager.CnFont();
-			hdrStyle.normal.textColor = new Color(0.72f, 0.86f, 1f);
-		}
-		GUIStyle hdr = hdrStyle;
-		// StringBuilder + Append(int) 免装箱（原 "(" + n + ")" 触发 int→object 装箱）
+
+		// 标题行：类型 + 等级 + 阶段
 		sb.Clear();
-		sb.Append("活跃天气系统 (").Append(n).Append(")   ").Append(exp ? "▼ 点击收起" : "▶ 点击展开");
-		if (GUI.Button(new Rect(x, y, bw - 20f, 24f), sb.ToString(), hdr))
+		sb.Append(WeatherSystem.TypeName(st.type)).Append("  ").Append(GradeName(st));
+		UiTheme.TextBold(new Rect(px, py, iw - 62f * s, 20f * s), sb.ToString(), Mathf.RoundToInt(14f * s), accent);
+		string stageTxt = (st.stage == 0) ? "发展" : ((st.stage == 1) ? "成熟" : "消散");
+		UiTheme.Chip(new Rect(px + iw - 58f * s, py + 1f * s, 58f * s, 17f * s), stageTxt,
+			st.stage == 0 ? UiTheme.Engine : (st.stage == 1 ? UiTheme.Fuel : UiTheme.Warn), Mathf.RoundToInt(11f * s));
+		py += 26f * s;
+
+		// 三条主指标：强度 / 能量 / 距离
+		float dist = DistTo(st);
+		DrawMetric(px, ref py, iw, s, "强度", UiTheme.IntensityOf(st.category), st.category / 6f,
+			"CAT-" + st.category + " / 上限 " + WeatherSystem.Spec[(int)st.type].maxCat);
+		DrawMetric(px, ref py, iw, s, "能量", UiTheme.Fuel, (float)(st.energy / 100.0), (st.energy).ToString("0") + "%");
+		if (dist >= 0f)
 		{
-			TyphoonManager.panelExpanded = !TyphoonManager.panelExpanded;
+			float maxShow = (float)(st.Rmax * 5.0);
+			DrawMetric(px, ref py, iw, s, "距离", UiTheme.Engine, 1f - Mathf.Clamp01(dist / maxShow), (dist / 1000f).ToString("0.0") + " km");
 		}
-		if (n == 0)
-		{
-			GUI.Label(new Rect(x, y + 28f, bw - 20f, 18f), "无活跃系统 — [F6] 打开气象菜单召唤", small);
-			return;
-		}
-		if (!exp)
+		py += 4f * s;
+
+		// 风圈刻度尺（7/10/12 级风圈）：尺长 = Router，主刻度 10 等分
+		double cr7 = st.WindCircleRoCached(13.9);
+		double cr10 = st.WindCircleRoCached(24.5);
+		double cr12 = st.WindCircleRoCached(32.7);
+		UiTheme.DrawText(new Rect(px, py, iw, 14f * s), "风圈（7/10/12 级 · 尺 = 外半径 " + (st.Router / 1000.0).ToString("0.#") + " km）", Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.55f));
+		py += 15f * s;
+		Rect ruler = new Rect(px, py, iw, 12f * s);
+		UiTheme.Ruler(ruler, 0f, (float)(st.Router / st.Rmax), (float)cr12, UiTheme.Intensity[6]);
+		// 三个风圈标记（三角形做不了，用小方块 + 数值）
+		Marker(ruler, (float)(st.Router / st.Rmax), (float)cr7, s, UiTheme.Fuel, (cr7 * st.Rmax / 1000.0).ToString("0") + "km");
+		Marker(ruler, (float)(st.Router / st.Rmax), (float)cr10, s, UiTheme.Throttle, (cr10 * st.Rmax / 1000.0).ToString("0") + "km");
+		Marker(ruler, (float)(st.Router / st.Rmax), (float)cr12, s, UiTheme.Warn, (cr12 * st.Rmax / 1000.0).ToString("0") + "km");
+		py += 16f * s;
+
+		// 数据两列
+		sb.Clear();
+		sb.Append("峰风 ").Append(st.EyewallWind.ToString("0")).Append(" m/s · 移速 ").Append(st.drift.ToString("0.#")).Append(" m/s");
+		UiTheme.DrawText(new Rect(px, py, iw, 14f * s), sb.ToString(), Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.85f));
+		py += 14f * s;
+		sb.Clear();
+		sb.Append("云底 ").Append((st.Hbase / 1000.0).ToString("0.00")).Append(" km · 云顶 ").Append((st.Htop / 1000.0).ToString("0.0")).Append(" km · ").Append(WeatherSystem.TerrainName(st.terrainKind));
+		// 登陆提示移入下方海温行，避免本行过长被裁剪
+		UiTheme.DrawText(new Rect(px, py, iw, 14f * s), sb.ToString(), Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.85f));
+		py += 14f * s;
+		if (st.type == StormType.Typhoon)
 		{
 			sb.Clear();
-			for (int i = 0; i < n; i++)
+			string sstLabel = (st.atmoClass == 2) ? "供能" : "海温";
+			if (st.terrainKind == TerrainKind.Ocean)
 			{
-				WeatherSystem s = TyphoonManager.systems[i];
-				if (s == null || !s.active)
-				{
-					continue;
-				}
-				if (sb.Length > 0)
-				{
-					sb.Append("  ·  ");
-				}
-				sb.Append(WeatherSystem.TypeName(s.type)).Append(' ').Append(WeatherSystem.StrengthName(s.type, s.category));
-			}
-			GUI.Label(new Rect(x, y + 28f, bw - 20f, 18f), sb.ToString(), small);
-			return;
-		}
-		y += 30f;
-		for (int i = 0; i < n; i++)
-		{
-			WeatherSystem s = TyphoonManager.systems[i];
-			if (s == null || !s.active)
-			{
-				continue;
-			}
-			bool isSel = main.selected == s;
-			// 优化#2 — GUIStyle 两态缓存（选中/未选中各一，首次创建复用）
-			if (rowSelStyle == null)
-			{
-				rowSelStyle = new GUIStyle(GUI.skin.box);
-				rowSelStyle.fontSize = 12;
-				rowSelStyle.alignment = TextAnchor.MiddleLeft;
-				rowSelStyle.font = TyphoonManager.CnFont();
-				rowSelStyle.normal.textColor = new Color(0.58f, 0.88f, 1f);
-			}
-			if (rowStyle == null)
-			{
-				rowStyle = new GUIStyle(GUI.skin.button);
-				rowStyle.fontSize = 12;
-				rowStyle.alignment = TextAnchor.MiddleLeft;
-				rowStyle.font = TyphoonManager.CnFont();
-				rowStyle.normal.textColor = new Color(0.82f, 0.9f, 1f);
-			}
-			GUIStyle row = isSel ? rowSelStyle : rowStyle;
-			// 整行文本 StringBuilder 复用（消除 int 装箱与多次临时字符串）
-			sb.Clear();
-			if (s.stage == 0)
-			{
-				sb.Append("发展 能量 ").Append((WeatherSystem.Clamp01((s.energy - 55.0) / 25.0) * 100.0).ToString("0")).Append('%');
-			}
-			else if (s.stage == 1)
-			{
-				// 能量制显示：阶段名+能量（见原注释语义，此处仅构建字符串）
-				sb.Append("成熟 能量 ").Append((WeatherSystem.Clamp01(s.energy / 80.0) * 100.0).ToString("0")).Append("%  升↗").Append((s.naturalProgress * 100.0).ToString("0")).Append('%');
+				sb.Append(sstLabel).Append(' ').Append(st.sstDisplay.ToString("0.0")).Append("°C ");
+				sb.Append(st.sstDisplay >= 26.8 ? "暖水·增强" : (st.sstDisplay >= 24.0 ? "临界" : "冷水·衰减"));
 			}
 			else
 			{
-				sb.Append("消散 能量 ").Append((WeatherSystem.Clamp01(s.energy / 30.0) * 100.0).ToString("0")).Append('%');
+				sb.Append(sstLabel).Append(" 无（已登陆·衰减中）");
 			}
-			string stageTxt = sb.ToString();
+			UiTheme.DrawText(new Rect(px, py, iw, 14f * s), sb.ToString(), Mathf.RoundToInt(11f * s),
+				st.sstDisplay >= 26.8 ? UiTheme.Fuel : (st.sstDisplay >= 24.0 ? UiTheme.Altitude : UiTheme.Warn));
+			py += 14f * s;
+		}
+		// 现象标签
+		string phen = PhenText(st);
+		if (!string.IsNullOrEmpty(phen))
+		{
+			UiTheme.Chip(new Rect(px, py, Mathf.Min(iw, phen.Length * 11f * s + 12f * s), 15f * s), phen, UiTheme.Throttle, Mathf.RoundToInt(10f * s));
+			py += 17f * s;
+		}
+
+		// 本地风块（玩家所在处）
+		if (main.pValid)
+		{
+			double windSpeed = System.Math.Sqrt(main.pU * main.pU + main.pW * main.pW);
+			UiTheme.Fill(new Rect(x + 1f, py, w - 2f, 1f), UiTheme.A(UiTheme.Text, 0.14f));
+			py += 5f * s;
+			UiTheme.DrawText(new Rect(px, py, iw, 14f * s), "本地风", Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.55f));
+			UiTheme.DrawText(new Rect(px + 40f * s, py, iw - 40f * s, 14f * s),
+				windSpeed.ToString("0.0") + " m/s (" + (windSpeed * 3.6).ToString("0") + " km/h) · " + WeatherSystem.Beaufort(windSpeed) + " 级",
+				Mathf.RoundToInt(11f * s), UiTheme.Fuel);
+			py += 15f * s;
+			// 能见度（逐型对标现实：暴雨内 <1km；风眼/云顶之上则清晰）
+			if (main.rainVisM < 12000f)
+			{
+				string visTxt = (main.rainVisM >= 1000f)
+					? (main.rainVisM / 1000f).ToString("0.0") + " km"
+					: main.rainVisM.ToString("0") + " m";
+				string visTag = main.rainVisTornado ? "龙卷沙幕" : "云/雨包裹";
+				UiTheme.DrawText(new Rect(px, py, iw, 14f * s),
+					"能见度 ≈ " + visTxt + "（" + visTag + "）",
+					Mathf.RoundToInt(10f * s), UiTheme.Warn);
+				py += 15f * s;
+			}
+			// 水平/垂直分量条（中心为 0，向两侧生长）
+			DrawBipolar(px, py, iw, s, "水平", main.pU, 60f, UiTheme.Engine, main.pU >= 0.0 ? "→" : "←");
+			py += 13f * s;
+			DrawBipolar(px, py, iw, s, "垂直", main.pW, 40f, UiTheme.Throttle, main.pW >= 0.0 ? "↑" : "↓");
+			py += 14f * s;
+			UiTheme.DrawText(new Rect(px, py, iw, 14f * s),
+				"真空速 " + main.pAirspeed.ToString("0.0") + " m/s · 高度 " + (main.pH / 1000.0).ToString("0.00") + " km",
+				Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.8f));
+		}
+
+		// 底栏键位提示
+		UiTheme.DrawText(new Rect(px, y + h - 15f * s, iw, 13f * s), "[F6] 菜单  [F7] 解散  [F8] 强度  [F9] 列表  [Shift+F7] 隐藏 HUD",
+			Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.45f));
+	}
+
+	// 指标行：标签 + 条 + 数值
+	private void DrawMetric(float px, ref float py, float iw, float s, string label, Color col, float pct, string val)
+	{
+		UiTheme.DrawText(new Rect(px, py, 34f * s, 13f * s), label, Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.7f));
+		Rect bar = new Rect(px + 36f * s, py + 2f * s, iw - 36f * s - 74f * s, 9f * s);
+		UiTheme.Bar(bar, pct, col, true);
+		UiTheme.DrawText(new Rect(bar.xMax + 6f * s, py, 68f * s, 13f * s), val, Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.95f), TextAnchor.MiddleRight);
+		py += 15f * s;
+	}
+
+	// 双极条（水平/垂直风分量：0 在中间）
+	private void DrawBipolar(float px, float py, float iw, float s, string label, double v, float full, Color col, string arrow)
+	{
+		UiTheme.DrawText(new Rect(px, py, 34f * s, 12f * s), label, Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.6f));
+		Rect bar = new Rect(px + 36f * s, py + 2f * s, iw - 36f * s - 74f * s, 8f * s);
+		UiTheme.Fill(bar, UiTheme.A(UiTheme.PanelDeep, 0.85f));
+		float mid = bar.x + bar.width * 0.5f;
+		UiTheme.Fill(new Rect(mid, bar.y, 1f, bar.height), UiTheme.A(UiTheme.Text, 0.25f));
+		float t = Mathf.Clamp((float)(v / full), -1f, 1f);
+		float w = bar.width * 0.5f * Mathf.Abs(t);
+		UiTheme.Fill(t >= 0f ? new Rect(mid, bar.y, w, bar.height) : new Rect(mid - w, bar.y, w, bar.height), col);
+		UiTheme.Frame(bar, UiTheme.A(UiTheme.Text, 0.18f));
+		UiTheme.DrawText(new Rect(bar.xMax + 6f * s, py, 68f * s, 12f * s), arrow + " " + System.Math.Abs(v).ToString("0.0"), Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.85f), TextAnchor.MiddleRight);
+	}
+
+	private static void Marker(Rect ruler, float rulerMax, float v, float s, Color col, string txt)
+	{
+		float t = Mathf.Clamp01(v / Mathf.Max(rulerMax, 0.001f));
+		float x = ruler.x + ruler.width * t;
+		UiTheme.Fill(new Rect(x - 1f, ruler.y + ruler.height * 0.72f, 3f, ruler.height * 0.5f), col);
+		UiTheme.DrawText(new Rect(x - 16f * s, ruler.y + ruler.height + 1f * s, 32f * s, 11f * s), txt, Mathf.RoundToInt(9f * s), UiTheme.A(col, 0.9f), TextAnchor.MiddleCenter);
+	}
+
+	// ---------------------------------------------------------------- ② 系统列表
+	private void DrawStormList(TyphoonManager main, float s)
+	{
+		int n = TyphoonManager.systems.Count;
+		bool exp = TyphoonManager.panelExpanded;
+		float w = 372f * s;
+		float x = UiTheme.Edge * s;
+		float headerH = 24f * s;
+		float rowH = 26f * s;
+		float body = exp ? (n * rowH + (n == 0 ? 20f * s : 0f)) : 0f;
+		float h = headerH + body + 8f * s;
+		float y = Screen.height - UiTheme.BottomReserve - h;
+		UiTheme.PanelBg(new Rect(x, y, w, h), 0.82f);
+
+		Color sel = UiTheme.Engine;
+		UiTheme.Fill(new Rect(x, y, 3f * s, h), UiTheme.A(sel, 0.85f));
+
+		// 表头（可点：展开/收起）
+		sb.Clear();
+		sb.Append("活跃天气系统  ").Append(n).Append(exp ? "   ▼" : "   ▶");
+		Rect hdr = new Rect(x + 8f * s, y + 2f * s, w - 16f * s, headerH - 4f * s);
+		if (GUI.Button(hdr, sb.ToString(), UiTheme.Button(Mathf.RoundToInt(12f * s))))
+		{
+			TyphoonManager.panelExpanded = !exp;
+		}
+		UiTheme.DrawText(new Rect(x + w - 96f * s, y + 4f * s, 88f * s, 16f * s), "[F9] 展开/收起", Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.45f), TextAnchor.MiddleRight);
+		if (!exp)
+		{
+			return;
+		}
+		float ry = y + headerH + 2f * s;
+		if (n == 0)
+		{
+			UiTheme.DrawText(new Rect(x + 12f * s, ry, w - 24f * s, 18f * s), "无活跃系统 · [F6] 打开气象菜单召唤", Mathf.RoundToInt(11f * s), UiTheme.A(UiTheme.Text, 0.5f));
+			return;
+		}
+		for (int i = 0; i < n; i++)
+		{
+			WeatherSystem st = TyphoonManager.systems[i];
+			if (st == null || !st.active)
+			{
+				continue;
+			}
+			Rect row = new Rect(x + 4f * s, ry, w - 8f * s, rowH - 2f * s);
+			bool isSel = main.selected == st;
+			if (isSel)
+			{
+				UiTheme.Fill(row, UiTheme.A(sel, 0.16f));
+			}
+			Color accent = UiTheme.IntensityOf(st.category);
+			UiTheme.Fill(new Rect(row.x, row.y + 3f * s, 3f * s, row.height - 6f * s), accent);
+
+			// 类型 + 等级
 			sb.Clear();
-			if (s.tornadoes.Count > 0)
-			{
-				sb.Append(" 龙卷×").Append(s.tornadoes.Count);
-			}
-			if (s.downbursts.Count > 0)
-			{
-				sb.Append(" 下暴×").Append(s.downbursts.Count);
-			}
-			if (s.gustFronts.Count > 0)          //
-			{
-				sb.Append(" 阵风锋×").Append(s.gustFronts.Count);
-			}
-			if (s.lightningBursts.Count > 0)     //
-			{
-				sb.Append(" 闪电×").Append(s.lightningBursts.Count);
-			}
-			string phen = sb.ToString();
-			// F8 超限标记：category > 类型自然上限（maxCat）时标 ⚠超限（god mode
-			// 实验自由不强制回落，但明示玩家"这等级不是自然的"）。
-			string over = (s.category > WeatherSystem.Spec[(int)s.type].maxCat) ? "⚠超限 " : "";
+			sb.Append(WeatherSystem.TypeName(st.type)).Append(' ').Append(GradeName(st));
+			UiTheme.DrawText(new Rect(row.x + 8f * s, row.y, 118f * s, row.height), sb.ToString(), Mathf.RoundToInt(11f * s),
+				isSel ? UiTheme.TextHover : UiTheme.A(UiTheme.Text, 0.9f));
+
+			// 三条迷你条：强度（分类）/能量/距离
+			float bx = row.x + 128f * s;
+			float bw = 42f * s;
+			UiTheme.Bar(new Rect(bx, row.y + 5f * s, bw, 6f * s), st.category / 6f, accent);
+			UiTheme.Bar(new Rect(bx + bw + 4f * s, row.y + 5f * s, bw, 6f * s), (float)(st.energy / 100.0), UiTheme.Fuel);
+			float d = DistTo(st);
+			UiTheme.Bar(new Rect(bx + (bw + 4f * s) * 2f, row.y + 5f * s, bw, 6f * s),
+				d < 0f ? 0f : 1f - Mathf.Clamp01((float)(d / (st.Rmax * 6.0))), UiTheme.Engine);
 			sb.Clear();
-			sb.Append(isSel ? "▶ " : "  ").Append(WeatherSystem.TypeName(s.type)).Append(' ').Append(GradeName(s));
-			sb.Append(over).Append(" [").Append(stageTxt).Append(']').Append(phen);
-			sb.Append("  峰风 ").Append(s.vmaxDisplay.ToString("0")).Append("m/s 半径 ").Append((s.Rmax / 1000.0).ToString("0.##")).Append("km 云顶 ").Append((s.Htop / 1000.0).ToString("0.0")).Append("km");   // 紧凑格式省宽
-			sb.Append(DistTo(s));
-			string txt = sb.ToString();
-			if (GUI.Button(new Rect(x, y, bw - 20f, 22f), txt, row))
+			sb.Append(d < 0f ? "其他星球" : (d / 1000.0).ToString("0.0") + "km");
+			UiTheme.DrawText(new Rect(bx, row.y + 12f * s, bw * 3f + 8f * s, 11f * s), sb.ToString(), Mathf.RoundToInt(9f * s), UiTheme.A(UiTheme.Text, 0.5f), TextAnchor.MiddleCenter);
+
+			// 现象标签
+			string phen = PhenText(st);
+			if (!string.IsNullOrEmpty(phen))
 			{
-				main.selected = s;
-				main.selectedType = (int)s.type;
+				UiTheme.DrawText(new Rect(row.xMax - 86f * s, row.y, 84f * s, row.height), phen, Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Throttle, 0.9f), TextAnchor.MiddleRight);
 			}
-			y += 24f;
+			if (GUI.Button(row, GUIContent.none, UiTheme.Hit()))
+			{
+				main.selected = st;
+				main.selectedType = (int)st.type;
+			}
+			ry += rowH;
 		}
 	}
 
-	// 等级名（含残余低压）：台风消散期逗点化明显（commaK>0.3，地球类）时
-	// 等级名改"残余低压"（现实：台风消散=变性/残余低压，新闻"残余低压持续降雨"）；
-	// 其余用类型分级名。
+	// ---------------------------------------------------------------- ③ 雷达带（风暴 + 龙卷预报）
+	// 玩家居中、±range 对称；风暴 = 发光团 + 云塔 + 地面投影（尺寸 ∝ Rmax、色 = 强度）；
+	// 龙卷 = 垂到地面的红色漏斗点（脉冲）；下方并入「龙卷预报」：最近龙卷的类型/EF/距离/
+	// 方位/现实秒 ETA + 本系统剩余潜势 + 伴生现象。
+	private void DrawRadar(TyphoonManager main, float s)
+	{
+		if (TyphoonManager.systems.Count == 0)
+		{
+			return;
+		}
+		float w = 356f * s;
+		float x = Screen.width - UiTheme.Edge * s - w;
+		float y = UiTheme.TopReserve;
+		float px = x + 10f * s;
+		float iw = w - 20f * s;
+		Location pl = TyphoonManager.GetPlayerLocation();
+		if (pl == null || (Object)pl.planet == (Object)null)
+		{
+			float hh = 48f * s;
+			UiTheme.PanelBg(new Rect(x, y, w, hh), 0.86f);
+			UiTheme.Fill(new Rect(x, y, w, 3f * s), UiTheme.A(UiTheme.Staging, 0.7f));
+			UiTheme.TextBold(new Rect(px, y + 4f * s, iw, 17f * s), "风暴雷达", Mathf.RoundToInt(12f * s), UiTheme.TextHover);
+			UiTheme.DrawText(new Rect(px, y + 24f * s, iw, 16f * s), "不在星球上 / 雷达不可用", Mathf.RoundToInt(10.5f * s), UiTheme.A(UiTheme.Text, 0.5f));
+			return;
+		}
+
+		// ---- 数据：预报宿主 + 最近龙卷 + 潜势 ----
+		WeatherSystem host = PickForecastHost(main, pl);
+		int torN = (host != null) ? host.tornadoes.Count : 0;
+		bool potential = host != null && host.stage == 1 && (host.tornadoQuota > 0 || host.tornadoQuota < 0);
+		bool companion = host != null && (host.downbursts.Count > 0 || host.gustFronts.Count > 0 || host.lightningBursts.Count > 0);
+
+		WeatherSystem.FxInst nearFx = null;
+		double nearD = 0.0;
+		bool nearEast = false;
+		float nearEta = -1f;
+		int nearEf = 0;
+		if (host != null && torN > 0)
+		{
+			double pa = pl.position.AngleRadians;
+			double pr = pl.planet.Radius;
+			double best = 1e18;
+			for (int i = 0; i < host.tornadoes.Count; i++)
+			{
+				WeatherSystem.FxInst fx = host.tornadoes[i];
+				double ta = host.centerAngle + fx.sOff * host.Rmax / pr;
+				double off = WeatherSystem.WrapPi(ta - pa) * pr;   // 有符号切向距离（+ = 玩家前方/东）
+				double d = System.Math.Abs(off);
+				if (d < best)
+				{
+					best = d;
+					nearFx = fx;
+					nearD = d;
+					nearEast = off > 0.0;
+				}
+			}
+			if (nearFx != null)
+			{
+				nearEf = WeatherSystem.EfFromWind(host.TornadoPeakWind(nearFx));
+				if (!nearEast && host.moveSpeed > 0.5)
+				{
+					// /时间加速倍率 → 现实秒（风暴向 +角 移动，玩家在西侧才是逼近中）
+					nearEta = (float)(nearD / host.moveSpeed / Mathf.Max(TyphoonManager.timeScaleReal, 0.01f));
+				}
+			}
+		}
+
+		// 预警色：红 = 龙卷已生成且 <5km；橙 = 有龙卷；黄 = 有潜势；灰 = 无
+		Color warnCol = UiTheme.Staging;
+		string warnTxt = "无";
+		if (torN > 0)
+		{
+			warnCol = UiTheme.Throttle;
+			warnTxt = "龙卷 ×" + torN;
+			if (nearFx != null && nearD < 5000.0)
+			{
+				warnCol = UiTheme.Warn;
+				warnTxt = "龙卷逼近";
+			}
+		}
+		else if (potential)
+		{
+			warnCol = UiTheme.Intensity[3];
+			warnTxt = "有潜势";
+		}
+
+		// ---- 面板几何（高度随预报行数）----
+		float headerH = 21f * s;
+		float scopeH = 74f * s;
+		float tickH = 11f * s;
+		float rowH = 15f * s;
+		int rows = 1 + ((torN > 0) ? 1 : 0) + ((torN == 0) ? 1 : 0) + (companion ? 1 : 0);
+		float h = headerH + 6f * s + scopeH + tickH + 5f * s + rows * rowH + 6f * s;
+		UiTheme.PanelBg(new Rect(x, y, w, h), 0.86f);
+		UiTheme.Fill(new Rect(x, y, w, 3f * s), UiTheme.A(warnCol, 0.9f));
+
+		// ---- 标题行（雷达 + 预警芯片）----
+		UiTheme.TextBold(new Rect(px, y + 3f * s, iw - 92f * s, 17f * s), "风暴雷达", Mathf.RoundToInt(12f * s), UiTheme.TextHover);
+		UiTheme.Chip(new Rect(x + w - 10f * s - 84f * s, y + 4f * s, 84f * s, 15f * s), warnTxt, warnCol, Mathf.RoundToInt(10f * s));
+
+		// ---- 范围：最远风暴外缘（下限 20km），半幅 = range ----
+		double maxRange = 20000.0;
+		for (int i = 0; i < TyphoonManager.systems.Count; i++)
+		{
+			WeatherSystem sys = TyphoonManager.systems[i];
+			if (sys == null || !sys.active || (Object)sys.planet != (Object)pl.planet)
+			{
+				continue;
+			}
+			double off = System.Math.Abs(WeatherSystem.WrapPi(sys.centerAngle - pl.position.AngleRadians)) * pl.planet.Radius;
+			maxRange = System.Math.Max(maxRange, off + sys.Rmax);
+		}
+		maxRange *= 1.12;
+
+		float sy0 = y + headerH + 6f * s;
+		Rect scope = new Rect(px, sy0, iw, scopeH);
+		UiTheme.Scope(scope);
+		float horizon = scope.yMax - 8f * s;                 // 地面线
+		float cxMid = scope.x + scope.width * 0.5f;          // 玩家在正中
+		float pxPerM = (float)(scope.width * 0.5 / maxRange);   // 米 → 像素
+
+		// 距离网格 + 刻度（−range … 0 … +range）
+		for (int i = 0; i <= 4; i++)
+		{
+			float gx = scope.x + scope.width * i / 4f;
+			UiTheme.Fill(new Rect(gx, scope.y + 3f * s, 1f, scope.height - 11f * s), UiTheme.A(UiTheme.Text, 0.09f));
+			double km = (i - 2) * 0.5 * maxRange / 1000.0;
+			string lab = (i == 2) ? "0" : (((km > 0.0) ? "+" : "") + km.ToString("0"));
+			UiTheme.DrawText(new Rect(gx - 22f * s, horizon + 1f * s, 44f * s, 10f * s), lab, Mathf.RoundToInt(8.5f * s), UiTheme.A(UiTheme.Text, 0.42f), TextAnchor.MiddleCenter);
+		}
+
+		// 地面线 + 扫描线（时间相位 → 雷达屏质感）
+		UiTheme.Fill(new Rect(scope.x + 2f * s, horizon, scope.width - 4f * s, 1f), UiTheme.A(UiTheme.Text, 0.26f));
+		float sweep = Mathf.Repeat(Time.time * 0.16f, 1f);
+		float swx = scope.x + scope.width * sweep;
+		UiTheme.Fill(new Rect(swx - 4f * s, scope.y + 3f * s, 8f * s, horizon - scope.y - 3f * s), UiTheme.A(UiTheme.Engine, 0.05f));
+		UiTheme.Fill(new Rect(swx, scope.y + 3f * s, 1f, horizon - scope.y - 3f * s), UiTheme.A(UiTheme.Engine, 0.22f));
+
+		// 玩家（正中）
+		UiTheme.Fill(new Rect(cxMid - 3.5f * s, horizon - 2f * s, 7f * s, 2f * s), UiTheme.TextHover);
+		UiTheme.Fill(new Rect(cxMid - 1.5f * s, horizon - 6f * s, 3f * s, 5f * s), UiTheme.TextHover);
+		UiTheme.DrawText(new Rect(cxMid - 16f * s, horizon - 18f * s, 32f * s, 10f * s), "你", Mathf.RoundToInt(9f * s), UiTheme.TextHover, TextAnchor.MiddleCenter);
+
+		// ---- 逐系统：发光团 + 云塔 + 地面投影 + 龙卷漏斗点 ----
+		float maxTower = scope.height - 20f * s;
+		for (int i = 0; i < TyphoonManager.systems.Count; i++)
+		{
+			WeatherSystem sys = TyphoonManager.systems[i];
+			if (sys == null || !sys.active || (Object)sys.planet != (Object)pl.planet)
+			{
+				continue;
+			}
+			double angOff = WeatherSystem.WrapPi(sys.centerAngle - pl.position.AngleRadians);
+			float sx = cxMid + (float)(angOff * pl.planet.Radius) * pxPerM;
+			Color col = UiTheme.IntensityOf(sys.category);
+			if (sx < scope.x + 3f * s || sx > scope.xMax - 3f * s)
+			{
+				// 超出雷达量程：贴边画一个小方块，提示"那边还有更远的"
+				float ex = Mathf.Clamp(sx, scope.x + 4f * s, scope.xMax - 6f * s);
+				UiTheme.Fill(new Rect(ex, horizon - 4f * s, 3f * s, 7f * s), UiTheme.A(col, 0.45f));
+				continue;
+			}
+			float rPx = Mathf.Clamp((float)sys.Rmax * pxPerM, 3f * s, 26f * s);
+			float tower = Mathf.Clamp((float)sys.Htop * pxPerM * 1.6f, 9f * s, maxTower);
+			float cy = horizon - 4f * s - tower * 0.5f;
+			bool sel = main.selected == sys;
+
+			UiTheme.Glow(sx, cy, Mathf.Max(rPx, 4.5f * s), col, sel ? 0.95f : 0.78f);
+			UiTheme.Fill(new Rect(sx - rPx * 0.22f, cy - tower * 0.5f, rPx * 0.44f, tower), UiTheme.A(col, 0.32f));       // 云塔
+			UiTheme.Fill(new Rect(sx - rPx * 0.78f, cy - tower * 0.62f, rPx * 1.56f, rPx * 0.3f), UiTheme.A(col, 0.24f));  // 云砧
+			UiTheme.Fill(new Rect(sx - rPx * 0.6f, horizon - 1.5f * s, rPx * 1.2f, 3f * s), UiTheme.A(col, 0.55f));        // 地面投影
+			if (sel)
+			{
+				UiTheme.Frame(new Rect(sx - rPx, cy - tower * 0.68f, rPx * 2f, tower * 0.72f + 7f * s), UiTheme.A(UiTheme.TextHover, 0.5f));
+				sb.Clear();
+				sb.Append(WeatherSystem.TypeName(sys.type)).Append(' ').Append(GradeName(sys));
+				UiTheme.DrawText(new Rect(sx - 50f * s, scope.y + 2f * s, 100f * s, 11f * s), sb.ToString(), Mathf.RoundToInt(9f * s), UiTheme.TextHover, TextAnchor.MiddleCenter);
+			}
+			// 龙卷：垂到地面的红色漏斗（脉冲，按实例 seed 错相）
+			for (int ti = 0; ti < sys.tornadoes.Count; ti++)
+			{
+				WeatherSystem.FxInst fx = sys.tornadoes[ti];
+				float tx = sx + (float)(fx.sOff * sys.Rmax) * pxPerM;
+				if (tx < scope.x + 2f * s || tx > scope.xMax - 2f * s)
+				{
+					continue;
+				}
+				float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 5.5f + (float)fx.seed);
+				float fh = Mathf.Clamp(tower * 0.42f, 6f * s, 26f * s);
+				UiTheme.Fill(new Rect(tx - 0.5f, horizon - fh, 1f, fh), UiTheme.A(UiTheme.Warn, 0.4f + 0.35f * pulse));
+				UiTheme.Fill(new Rect(tx - 4f * s, horizon - 5f * s, 8f * s, 5f * s), UiTheme.A(UiTheme.Warn, 0.3f * pulse));
+				UiTheme.Fill(new Rect(tx - 2f * s, horizon - 4f * s, 4f * s, 4f * s), UiTheme.A(UiTheme.Warn, 0.7f + 0.3f * pulse));
+			}
+		}
+
+		// ---- 龙卷预报（并入雷达下方）----
+		float fy = sy0 + scopeH + tickH + 3f * s;
+		UiTheme.Fill(new Rect(px, fy - 3f * s, iw, 1f), UiTheme.A(UiTheme.Text, 0.12f));
+		float ry = fy;
+		UiTheme.TextBold(new Rect(px, ry, 58f * s, rowH), "龙卷预报", Mathf.RoundToInt(10.5f * s), UiTheme.A(UiTheme.Text, 0.9f));
+		sb.Clear();
+		if (host == null)
+		{
+			sb.Append("本星球暂无系统");
+		}
+		else if (torN > 0)
+		{
+			sb.Append("现役 ").Append(torN).Append(" 个");
+		}
+		else if (potential)
+		{
+			sb.Append("潜势 · 待触发");
+		}
+		else
+		{
+			sb.Append("无潜势");
+		}
+		UiTheme.DrawText(new Rect(px + 62f * s, ry, iw - 62f * s, rowH), sb.ToString(), Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.7f), TextAnchor.MiddleRight);
+		ry += rowH;
+
+		if (torN > 0 && nearFx != null)
+		{
+			sb.Clear();
+			sb.Append("● ").Append(WeatherSystem.TornadoSizeName(host.TornadoCoreR(nearFx)))
+				.Append(WeatherSystem.TornadoVariantName(nearFx.variant)).Append("龙卷 EF").Append(nearEf);
+			sb.Append(" · ").Append((nearD >= 1000.0) ? ((nearD / 1000.0).ToString("0.0") + " km") : (nearD.ToString("0") + " m"));
+			sb.Append(nearEast ? " →" : " ←");
+			if (nearEta >= 0f)
+			{
+				sb.Append(" · ").Append((nearEta >= 60f) ? ((nearEta / 60f).ToString("0.0") + " 分钟后抵达") : (nearEta.ToString("0") + " 秒后抵达"));
+			}
+			else
+			{
+				sb.Append(" · 正在远离");
+			}
+			UiTheme.DrawText(new Rect(px + 4f * s, ry, iw - 4f * s, rowH), sb.ToString(), Mathf.RoundToInt(10f * s), warnCol);
+			ry += rowH;
+		}
+		if (torN == 0)
+		{
+			string txt;
+			if (host == null)
+			{
+				txt = "当前星球没有可预报的天气系统";
+			}
+			else if (host.tornadoQuota < 0)
+			{
+				txt = "龙卷潜势：不限额（现实性配额已关闭）";
+			}
+			else if (host.tornadoQuota == 0)
+			{
+				txt = WeatherSystem.TypeName(host.type) + " 未配上龙卷潜势（约 2/3 强风暴一生不产龙卷）";
+			}
+			else if (host.stage != 1)
+			{
+				txt = "余 " + host.tornadoQuota + " 个 · 成熟期才触发（当前" + ((host.stage == 0) ? "发展" : "消散") + "）";
+			}
+			else
+			{
+				txt = "余 " + host.tornadoQuota + " 个 · 成熟期随机触发（约 10-30 分钟）";
+			}
+			UiTheme.DrawText(new Rect(px + 4f * s, ry, iw - 4f * s, rowH), txt, Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.6f));
+			ry += rowH;
+		}
+		if (companion)
+		{
+			sb.Clear();
+			sb.Append("伴生");
+			if (host.downbursts.Count > 0) sb.Append(" 下击暴流×").Append(host.downbursts.Count);
+			if (host.gustFronts.Count > 0) sb.Append(" 阵风锋×").Append(host.gustFronts.Count);
+			if (host.lightningBursts.Count > 0) sb.Append(" 闪电×").Append(host.lightningBursts.Count);
+			UiTheme.DrawText(new Rect(px + 4f * s, ry, iw - 4f * s, rowH), sb.ToString(), Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Throttle, 0.85f));
+		}
+	}
+
+	// 预报宿主：①选中的系统（同星球）优先 → ②有现役龙卷的 → ③有龙卷潜势的 → ④最近的。
+	private static WeatherSystem PickForecastHost(TyphoonManager main, Location pl)
+	{
+		WeatherSystem sel = main.selected;
+		if (sel != null && sel.active && (Object)sel.planet == (Object)pl.planet)
+		{
+			return sel;
+		}
+		WeatherSystem best = null;
+		double bestScore = double.MinValue;
+		for (int i = 0; i < TyphoonManager.systems.Count; i++)
+		{
+			WeatherSystem sys = TyphoonManager.systems[i];
+			if (sys == null || !sys.active || (Object)sys.planet != (Object)pl.planet)
+			{
+				continue;
+			}
+			double score = 0.0;
+			if (sys.tornadoes.Count > 0) score += 1e9;
+			if (sys.stage == 1 && sys.tornadoQuota != 0) score += 1e8;
+			score -= System.Math.Abs(WeatherSystem.WrapPi(sys.centerAngle - pl.position.AngleRadians)) * pl.planet.Radius;
+			if (score > bestScore)
+			{
+				bestScore = score;
+				best = sys;
+			}
+		}
+		return best;
+	}
+
+	// ---------------------------------------------------------------- 工具
+	private static string PhenText(WeatherSystem st)
+	{
+		if (st.tornadoes.Count == 0 && st.downbursts.Count == 0 && st.gustFronts.Count == 0 && st.lightningBursts.Count == 0)
+		{
+			return null;
+		}
+		StringBuilder b = phenSb;
+		b.Clear();
+		if (st.tornadoes.Count > 0) b.Append("龙卷×").Append(st.tornadoes.Count);
+		if (st.downbursts.Count > 0) b.Append(b.Length > 0 ? " " : "").Append("下暴×").Append(st.downbursts.Count);
+		if (st.gustFronts.Count > 0) b.Append(b.Length > 0 ? " " : "").Append("阵风锋×").Append(st.gustFronts.Count);
+		if (st.lightningBursts.Count > 0) b.Append(b.Length > 0 ? " " : "").Append("闪电×").Append(st.lightningBursts.Count);
+		return b.ToString();
+	}
+
 	private static string GradeName(WeatherSystem s)
 	{
 		if (s.type == StormType.Typhoon && s.commaK > 0.3 && s.atmoClass == 0)
@@ -269,208 +641,21 @@ public class TyphoonHud : MonoBehaviour
 		return WeatherSystem.StrengthName(s.type, s.category);
 	}
 
-	private static string DistTo(WeatherSystem s)
-	{
-		try
-		{			Location pl = TyphoonManager.GetPlayerLocation();
-			if (pl == null || pl.planet == null || (Object)pl.planet != (Object)s.planet)
-			{
-				return "  其他星球";
-			}
-			double d = Math.Abs(WrapAngle(s.centerAngle - pl.position.AngleRadians)) * s.planet.Radius;
-			return "  距 " + (d / 1000.0).ToString("0.0") + " km";
-		}
-		catch
-		{
-			return "";
-		}
-	}
-
-	private static double WrapAngle(double a)
-	{
-		while (a > Math.PI)
-		{
-			a -= Math.PI * 2.0;
-		}
-		while (a < -Math.PI)
-		{
-			a += Math.PI * 2.0;
-		}
-		return a;
-	}
-
-	// ===== 顶部：选中系统详情 + 玩家飞行数据 + 视距/键位 =====
-	private void DrawTopBar(TyphoonManager main)
-	{
-		WeatherSystem s = S;
-		if (s == null || !s.active)
-		{
-			// HUD 下移（用户要求）+ 删视距/缩放空间字样。 — 宽度对齐详情面板 430。
-			Rect v0 = new Rect(14f, 58f, 430f, 48f);
-			GUI.Box(v0, GUIContent.none, box);
-			sb.Clear();
-			sb.Append("TYPHOON — 待机  系统 ").Append(TyphoonManager.systems.Count);
-			GUI.Label(new Rect(28f, 64f, 300f, 20f), sb.ToString(), header);
-			GUI.Label(new Rect(28f, 86f, 400f, 18f), "[F6] 菜单  [Shift+F7] 隐藏", small);
-			return;
-		}
-		float num = 370f;   // 排版修复：宽 322→430、高 330→370（雅黑字体行高比 Futura 大 + 峰值风拆两行）
-		// HUD 下移一些（用户要求）：y 14 → 58，避开 SFS 原版左上 UI。
-		Rect val = new Rect(14f, 58f, 430f, num);
-		GUI.Box(val, GUIContent.none, box);
-		float num2 = val.x + 14f;
-		float num3 = val.y + 10f;
-		float rowW = 402f;   // 行宽统一（面板 430 - 左右 padding 28）
-		Color val3 = (GUI.color = Category.Tint[s.category]);
-		// 多实例：显示数量（龙卷×N 下暴×M）。
-		string phen = (s.tornadoes.Count > 0 ? "  龙卷×" + s.tornadoes.Count : "") + (s.downbursts.Count > 0 ? "  下暴×" + s.downbursts.Count : "");
-		string over2 = (s.category > WeatherSystem.Spec[(int)s.type].maxCat) ? "⚠超限 " : "";   // F8 超限标记
-		// 标题行 StringBuilder（原多段拼接 + int 装箱）
-		sb.Clear();
-		sb.Append("◎ ").Append(WeatherSystem.TypeName(s.type)).Append("  ").Append(GradeName(s)).Append(over2).Append("  [").Append(s.stage == 0 ? "发展" : (s.stage == 1 ? "成熟" : "消散")).Append(']').Append(phen);
-		GUI.Label(new Rect(num2, num3, rowW, 20f), sb.ToString(), header);
-		GUI.color = Color.white;
-		num3 += 22f;
-		// 排版：峰值风行拆两行（原一行 322px 塞 峰值风+km/h+云底+云顶+移速 ~400px 溢出裁切）
-		sb.Clear();
-		sb.Append("峰值风 ").Append(s.EyewallWind.ToString("0")).Append(" m/s (").Append((s.EyewallWind * 3.6).ToString("0")).Append(" km/h)    移速 ").Append(s.drift.ToString("0.#")).Append(" m/s");
-		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);   // 待办5 🟡-8：口径统一为 EyewallWind（基准 PeakWind × 眼壁 1.2）
-		num3 += 20f;
-		sb.Clear();
-		sb.Append("云底 ").Append((s.Hbase / 1000.0).ToString("0.00")).Append(" km    云顶 ").Append((s.Htop / 1000.0).ToString("0.0")).Append(" km");
-		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);
-		num3 += 20f;
-		// 地形行移出 pValid 分支（用户：HUD 没显示地形）：地形是风暴自身属性，
-		// 与玩家位置无关——只要选中系统就显示（原嵌在 pValid 分支，玩家不在风暴范围
-		// 走 else 分支整行不渲染）。 — 所有风暴都显示地形（用户：地形对所有风暴
-		// 生效），"已登陆·衰减中"后缀仅台风（雷暴无登陆衰减概念）。
-		sb.Clear();
-		sb.Append("地形 ").Append(WeatherSystem.TerrainName(s.terrainKind)).Append((s.type == StormType.Typhoon && s.overLand) ? "（已登陆·衰减中）" : "");
-		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-		num3 += 20f;
-		// 台风海温显示（用户：冷水会冷死台风）：海上显示中心海温 + 冷暖状态，
-		// 冷海水（<24°C）台风能量快速枯竭。
-		// 审查🟡-12/🟡-4：阈值 26.5→26.8 对齐 sstF≥1.0（26.5 处 sstF=0.96 实为
-		// 轻微衰减，"暖水增强"名不副实）；巨行星无"海"，标签改"供能"（内部热通量等效温度）。
-		if (s.type == StormType.Typhoon)
-		{
-			string sstLabel = (s.atmoClass == 2) ? "供能" : "海温";
-			sb.Clear();
-			if (s.terrainKind == TerrainKind.Ocean)
-			{
-				sb.Append(sstLabel).Append(' ').Append(s.sstDisplay.ToString("0.0")).Append("°C ").Append(s.sstDisplay >= 26.8 ? "（暖水·增强）" : ((s.sstDisplay >= 24.0) ? "（临界）" : "（冷水·快速衰减）"));
-			}
-			else
-			{
-				sb.Append(sstLabel).Append(" 无（已登陆）");
-			}
-			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-			num3 += 20f;
-		}
-		if ((Object)main != (Object)null && main.pValid)
-		{
-			double num4 = Math.Abs(main.pS);
-			double rho = num4 / s.Rmax;
-			double pU = main.pU;
-			double pW = main.pW;
-			double num5 = Math.Sqrt(pU * pU + pW * pW);
-			sb.Clear();
-			sb.Append("本地风  ").Append(num5.ToString("0.0")).Append(" m/s   (").Append((num5 * 3.6).ToString("0")).Append(" km/h)  = ").Append(WeatherSystem.Beaufort(num5).ToString()).Append("级");
-			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-			num3 += 20f;
-			sb.Clear();
-			sb.Append("  水平 ").Append(pU >= 0.0 ? "→ " : "← ").Append(Math.Abs(pU).ToString("0.0")).Append("    垂直 ").Append(pW >= 0.0 ? "↑ " : "↓ ").Append(Math.Abs(pW).ToString("0.0")).Append(" m/s");
-			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-			num3 += 20f;
-			sb.Clear();
-			sb.Append("真空速 ").Append(main.pAirspeed.ToString("0.0")).Append(" m/s    高度 ").Append((main.pH / 1000.0).ToString("0.00")).Append(" km");
-			GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-			num3 += 20f;
-			// HUD 不再对非台风无差别套用台风结构（用户发现）：台风显示 距风眼+11区名+
-			// 风圈；非台风只显示 距中心+ρ（风眼/风圈是台风专属概念）。
-			if (s.type == StormType.Typhoon)
-			{
-				sb.Clear();
-				sb.Append("距风眼 ").Append((num4 / 1000.0).ToString("0.0")).Append(" km   (ρ=").Append(rho.ToString("0.00")).Append(")  ").Append(Zone(rho, s, main.pS));
-				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-				num3 += 20f;
-				// 风圈半径（用户：7/10/12 级风圈概念）：当前风场配置下各等级风圈最远半径。
-				double cr7 = s.WindCircleRoCached(13.9);   // 缓存版
-				double cr10 = s.WindCircleRoCached(24.5);
-				double cr12 = s.WindCircleRoCached(32.7);
-				sb.Clear();
-				sb.Append("风圈 7级≈").Append((cr7 * s.Rmax / 1000.0).ToString("0")).Append("km  10级≈").Append((cr10 * s.Rmax / 1000.0).ToString("0")).Append("km  12级≈").Append((cr12 * s.Rmax / 1000.0).ToString("0")).Append("km");
-				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-				num3 += 20f;
-			}
-			else
-			{
-				sb.Clear();
-				sb.Append("距中心 ").Append((num4 / 1000.0).ToString("0.0")).Append(" km   (ρ=").Append(rho.ToString("0.00")).Append(")  风级 ").Append(WeatherSystem.Beaufort(num5).ToString()).Append("级");
-				GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), label);
-				num3 += 20f;
-			}
-			num3 += 20f;
-			// bar 缩短（用户：活跃系统左边缘缩减为原先一半、右边缘位置固定）：
-			// 宽 294→150。 — 面板加宽后居中（原右端固定在 num2+294 会偏左）。
-			float num6 = 150f;
-			float num7 = 12f;
-			Rect val5 = new Rect(num2 + (rowW - num6) * 0.5f, num3, num6, num7);
-			GUI.DrawTexture(val5, (Texture)bar);
-			// 眼壁 marker 台风专属（用户：找 HUD 中疑似显示台风结构的那个——
-			// 就是这里：±Rmax 位置的两条竖线是台风眼壁标记，原对非台风也画 = 误套台风结构）。
-			if (s.type == StormType.Typhoon)
-			{
-				for (int i = -1; i <= 1; i += 2)
-				{
-					float num8 = val5.x + num6 * 0.5f + (float)i * (float)(s.Rmax / (s.Router * 1.6) * (double)num6 * 0.5);
-					GUI.color = new Color(val3.r, val3.g, val3.b, 0.85f);
-					GUI.DrawTexture(new Rect(num8 - 1f, val5.y, 2f, num7), (Texture)marker);
-				}
-			}
-			GUI.color = new Color(1f, 1f, 1f, 0.35f);
-			GUI.DrawTexture(new Rect(val5.x + num6 * 0.5f - 1f, val5.y, 2f, num7), (Texture)marker);
-			float num11 = Mathf.Clamp((float)(main.pS / (s.Router * 1.6)), -1f, 1f);
-			GUI.color = Color.white;
-			GUI.DrawTexture(new Rect(val5.x + num6 * 0.5f + num11 * num6 * 0.5f - 2f, val5.y - 3f, 4f, num7 + 6f), (Texture)marker);
-			GUI.color = Color.white;
-			num3 += num7 + 6f;
-		}
-		else
-		{
-			GUI.Label(new Rect(num2, num3, rowW, 18f), "（不在该星球 / 风暴范围外）", label);
-			num3 += 60f;
-		}
-		// 视距数据面板显示（用户：把视距数据在面板显示）
-		sb.Clear();
-		sb.Append("视距 ").Append(ViewDist().ToString("0")).Append(" m");
-		GUI.Label(new Rect(num2, num3, rowW, 18f), sb.ToString(), small);
-		num3 += 20f;
-		// 删视距/缩放空间字样（用户要求）；键位提示精简（F1/Shift+F8 已删）。
-		GUI.Label(new Rect(num2, num3, rowW, 18f), "[F6] 菜单  [F7] 解散  [F8] 强度  [F9] 面板  [Shift+F7] 隐藏", small);
-		num3 += 20f;
-	}
-
-	private static double ViewDist()
+	// 玩家到风暴中心的切向距离（米）；不同星球返回 -1
+	private static float DistTo(WeatherSystem s)
 	{
 		try
 		{
-			return ((Obs<float>)(object)WorldView.main.viewDistance).Value;
+			Location pl = TyphoonManager.GetPlayerLocation();
+			if (pl == null || (Object)pl.planet == (Object)null || (Object)pl.planet != (Object)s.planet)
+			{
+				return -1f;
+			}
+			return (float)(System.Math.Abs(WeatherSystem.WrapPi(s.centerAngle - pl.position.AngleRadians)) * s.planet.Radius);
 		}
 		catch
 		{
-			return 0.0;
+			return -1f;
 		}
-	}
-
-	private static string Zone(double rho, WeatherSystem s, double pS)
-	{
-		// HUD 区域标注与 11 区风场统一（用户：HUD 区跟实际台风统一吗——旧 Zone 是
-		// 随手 5 段 0.5/0.85/1.25/2.4/3.6，与 -79 的 11 区分段 0.7/1.2/1.6/2.2/3.0
-		// 完全错位：HUD 说“眼壁内缘”实际风已在“强·眼壁”，说“内雨带”实际在“较强+中”）。
-		// 现在直接调 WindZoneIndex → 显示 11 区名 + 区号（ — 风区偏移调试已移除）。
-		double sWind = pS;
-		int zi = WeatherSystem.WindZoneIndex(sWind / s.Rmax);
-		return "[" + zi.ToString() + "]" + StormRenderer.windZoneNames[zi];   // zi.ToString() 免 int 装箱
 	}
 }

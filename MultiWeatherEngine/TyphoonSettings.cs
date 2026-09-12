@@ -149,11 +149,15 @@ public static class TyphoonSettings
 		ToggleRow(box, w, "台风残余低压", () => TyphoonConfig.I.residualLow, delegate (bool v) { TyphoonConfig.I.residualLow = v; });
 		ToggleRow(box, w, "沙尘泥雨", () => TyphoonConfig.I.muddyRain, delegate (bool v) { TyphoonConfig.I.muddyRain = v; });
 		ToggleRow(box, w, "云底侵蚀", () => TyphoonConfig.I.cloudBaseErosion, delegate (bool v) { TyphoonConfig.I.cloudBaseErosion = v; });
+		// 附属现象现实配额（现实性审计）：关掉 = 旧的高频连续生成（龙卷恒满 4 个）。
+		ToggleRow(box, w, "现象现实配额（龙卷/下暴按现实频率）", () => TyphoonConfig.I.phenomenaRealism, delegate (bool v) { TyphoonConfig.I.phenomenaRealism = v; });
 		// 自然生成（"随机刷新"参数）：开关 + 间隔 + 距离，免去玩家困惑"风暴从哪来"。
 		Section(box, w, "自然生成（随机刷新）");
 		ToggleRow(box, w, "自然生成", () => TyphoonConfig.I.naturalSpawn, delegate (bool v) { TyphoonConfig.I.naturalSpawn = v; });
-		NumRow(box, w, "最小间隔 (秒)", TyphoonConfig.I.naturalSpawnMinSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMinSec = Mathf.Clamp(v, 5f, 600f); });
-		NumRow(box, w, "最大间隔 (秒)", TyphoonConfig.I.naturalSpawnMaxSec, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMaxSec = Mathf.Clamp(v, 10f, 1200f); });
+		// 间隔单位改为**游戏分钟**（内部字段仍是游戏秒）：时间加速倍率越高 → 游戏时间
+		// 推进越快 → 生成同步快进。现实量级：一个 ~60km 半径区域内强对流生成一天数次。
+		NumRow(box, w, "最小间隔 (游戏分钟)", TyphoonConfig.I.naturalSpawnMinSec / 60f, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMinSec = Mathf.Clamp(v, 1f, 720f) * 60f; });
+		NumRow(box, w, "最大间隔 (游戏分钟)", TyphoonConfig.I.naturalSpawnMaxSec / 60f, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnMaxSec = Mathf.Clamp(v, 1f, 1440f) * 60f; });
 		NumRow(box, w, "生成距离 (km)", TyphoonConfig.I.naturalSpawnDistKm, 5f, delegate (float v) { TyphoonConfig.I.naturalSpawnDistKm = Mathf.Clamp(v, 15f, 500f); });
 		// 预生成（进存档/换星球时给当前行星播种）
 		Section(box, w, "预生成（进存档播种）");
@@ -162,6 +166,12 @@ public static class TyphoonSettings
 		NumRow(box, w, "台风概率 (%)", TyphoonConfig.I.preSpawnTyphoonChance * 100f, 5f, delegate (float v) { TyphoonConfig.I.preSpawnTyphoonChance = Mathf.Clamp(v / 100f, 0f, 1f); });
 		Section(box, w, "影响");
 		ToggleRow(box, w, "影响宇航员", () => TyphoonConfig.I.affectAstronauts, delegate (bool v) { TyphoonConfig.I.affectAstronauts = v; });
+		// 风暴卷起的障碍物（树/石）：真实障碍物，可撞毁火箭（游戏原生 RocketCollision）
+		ToggleRow(box, w, "卷起树木/石头（可撞击火箭）", () => TyphoonConfig.I.stormDebris, delegate (bool v) { TyphoonConfig.I.stormDebris = v; });
+		NumRow(box, w, "障碍物上限/风暴", (float)TyphoonConfig.I.debrisMaxPerStorm, 2f, delegate (float v) { TyphoonConfig.I.debrisMaxPerStorm = Mathf.Clamp(Mathf.RoundToInt(v), 0, 40); });
+		ToggleRow(box, w, "障碍物可摧毁火箭", () => TyphoonConfig.I.debrisHurtsRockets, delegate (bool v) { TyphoonConfig.I.debrisHurtsRockets = v; });
+		ToggleRow(box, w, "龙卷内部能见度骤降", () => TyphoonConfig.I.tornadoObscure, delegate (bool v) { TyphoonConfig.I.tornadoObscure = v; });
+		ToggleRow(box, w, "云/雨包裹能见度骤降（逐型对标现实）", () => TyphoonConfig.I.rainObscure, delegate (bool v) { TyphoonConfig.I.rainObscure = v; });
 		// 快捷键说明（只读，玩家易忽略）
 		Section(box, w, "快捷键");
 		Builder.CreateLabel(box, w, 22, 0, 0, "F6 气象菜单  F7 解散选中  F8 强度+1");
