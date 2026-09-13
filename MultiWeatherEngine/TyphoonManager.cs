@@ -198,6 +198,8 @@ public class TyphoonManager : MonoBehaviour
 							s.ToStormFrame(cam.position, out double cs, out double ch);
 							double camAng = cam.position.AngleRadians;
 							double pr = cam.planet.Radius;
+							// 预警曲是"地面龙卷警笛"：玩家高于阈值（默认 12km）不算逼近。
+							bool altOk = ch <= Math.Max(0f, TyphoonConfig.I.tornadoThemeMaxAltM);
 							for (int ti = 0; ti < s.tornadoes.Count; ti++)
 							{
 								WeatherSystem.FxInst fx = s.tornadoes[ti];
@@ -213,23 +215,27 @@ public class TyphoonManager : MonoBehaviour
 								// 扣掉核半径后，"到达"= 漏斗壁碰到你，15 秒 ≈ 230m 外，才是想要的预警量。
 								double offM = WeatherSystem.WrapPi(s.centerAngle + fx.sOff * s.Rmax / pr - camAng) * pr;
 								double absM = Math.Abs(offM);
-								if (nearestTornadoDistM < 0f || absM < nearestTornadoDistM)
+								if (altOk && (nearestTornadoDistM < 0f || absM < nearestTornadoDistM))
 								{
 									nearestTornadoDistM = (float)absM;
 								}
-								if (offM < 0.0 && s.moveSpeed > 0.5)
+								// 接近速度 = 风暴移速 − 飞船自身沿轨道切向速度（+角为正）：
+								// 原地不动 = 只靠风暴移速（原行为）；迎上去更早触发、同向逃跑则解除。
+								double vT = PlayerOrbitSpeed(cam);
+								double closing = s.moveSpeed - vT;
+								if (altOk && offM < 0.0 && closing > 0.25)
 								{
 									double coreM = s.TornadoCoreR(fx);
 									double spanM = absM - coreM;
 									float warp = Mathf.Max(timeScaleReal, 0.01f);
 									// 换算成**现实秒**（÷时间加速倍率）：HUD 倒计时与预警曲都按
 									// 玩家真实感受到的时间走，不看时间加速。
-									float eta = (float)(Math.Max(0.0, spanM) / s.moveSpeed / warp);
+									float eta = (float)(Math.Max(0.0, spanM) / closing / warp);
 									if (nearestTornadoEta < 0f || eta < nearestTornadoEta)
 									{
 										nearestTornadoEta = eta;
 										nearestTornadoCoreM = (float)coreM;   // 最紧迫的那个决定用哪首曲子
-										nearestTornadoSpeedReal = (float)(s.moveSpeed / warp);
+										nearestTornadoSpeedReal = (float)(closing / warp);
 									}
 								}
 								if (!TyphoonConfig.I.tornadoObscure)
@@ -649,10 +655,6 @@ public class TyphoonManager : MonoBehaviour
 					{
 						continue;
 					}
-					if (s.type == StormType.DustStorm)
-					{
-						continue;   // 已处理
-					}
 					double da = s.centerAngle - pl.position.AngleRadians;
 					while (da > Math.PI)
 					{
@@ -663,6 +665,24 @@ public class TyphoonManager : MonoBehaviour
 						da += Math.PI * 2.0;
 					}
 					double ro = Math.Abs(da) * s.planet.Radius / s.Rmax;   // 归一化水平半径
+					if (WeatherSystem.IsPrecipFree(s.type))
+					{
+						// 浓雾：贴地雾层 —— 玩家在雾层内时能见度骤降至数百米（屏幕级白/灰雾）。
+						// 原实现把浓雾直接 continue → 进浓雾屏幕毫无变化。
+						if (s.type == StormType.DenseFog && ro <= 1.6 && pl.Height <= s.Htop * 1.15)
+						{
+							double hSpanF = Math.Max(s.Htop - s.Hbase, 1.0);
+							double hFf = WeatherSystem.Clamp01(1.0 - Math.Max(0.0, pl.Height - s.Hbase) / hSpanF);
+							float wrapF = (float)((1.0 - ro / 1.6) * (0.5 + 0.5 * hFf));
+							double visFog = 150.0 + 950.0 * (1.0 - wrapF);   // 雾心 ~150m、边缘 ~1.1km
+							if (visFog < bestVis)
+							{
+								bestVis = visFog;
+							}
+							bestWrap = Mathf.Max(bestWrap, wrapF);
+						}
+						continue;   // 其余无降水系统（沙尘暴/尘卷风）：已由 DustFactor 单独处理
+					}
 					// 台风风眼：无雨、可见蓝天 → 不包裹（风眼内反而看得远）
 					double eyeRT = (s.type == StormType.Typhoon) ? WeatherSystem.TyphoonEyeR(s.category) : 0.0;
 					if (eyeRT > 0.05 && ro < eyeRT)
@@ -910,24 +930,49 @@ public class TyphoonManager : MonoBehaviour
 		{
 			return;
 		}
-		// 沙尘暴自然生成（独立天气系统，用户：沙尘暴应该是独立系统才对）：
-		// 玩家在沙漠地形时概率触发（蒙古气旋/冷锋驱动干旱区沙尘暴，不依赖雷暴）。
-		bool inDesert = false;
+		// 类型抽签（2026-09-12 扩展：6 类新天气按地形/相态分布；无降水系统独立于对流族）。
+		TerrainKind tk = TerrainKind.Green;
 		try
 		{
-			inDesert = WeatherSystem.TerrainAt(loc.planet, loc.position) == TerrainKind.Desert;
+			tk = WeatherSystem.TerrainAt(loc.planet, loc.position);
 		}
 		catch
 		{
 		}
-		if (inDesert && UnityEngine.Random.value < 0.55f)
+		if (tk == TerrainKind.Desert && UnityEngine.Random.value < 0.55f)
 		{
+			// 干旱区：沙尘暴（Haboob 大范围）与尘卷风（晴空小旋，更常见）二选一
 			double leadD = (double)(8000f + UnityEngine.Random.Range(0f, 30000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
-			SpawnSystem(StormType.DustStorm, loc, leadD, 0, true);
+			SpawnSystem((UnityEngine.Random.value < 0.5f) ? StormType.DustStorm : StormType.DustDevil, loc, leadD, 0, true);
 			return;
 		}
-		StormType t = (UnityEngine.Random.value < 0.55f) ? StormType.Cell : ((UnityEngine.Random.value < 0.7f) ? StormType.Multicell : StormType.Supercell);
 		double lead = (double)UnityEngine.Random.Range(12000f, Mathf.Max(12001f, TyphoonConfig.I.naturalSpawnDistKm * 1000f)) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
+		// 冷季固态降水（冰原/绿地高纬）：冬季风暴（暴雪）与冰暴（冻雨）
+		if ((tk == TerrainKind.Ice || tk == TerrainKind.Green) && UnityEngine.Random.value < 0.30f)
+		{
+			SpawnSystem((UnityEngine.Random.value < 0.6f) ? StormType.WinterStorm : StormType.IceStorm, loc, lead, 0, true);
+			return;
+		}
+		// 海洋：大气河（水汽输送带）与浓雾（海雾）
+		if (tk == TerrainKind.Ocean && UnityEngine.Random.value < 0.28f)
+		{
+			SpawnSystem((UnityEngine.Random.value < 0.6f) ? StormType.AtmosphericRiver : StormType.DenseFog, loc, lead, 0, true);
+			return;
+		}
+		// 陆地静稳辐射雾（浓雾）
+		if (UnityEngine.Random.value < 0.14f)
+		{
+			SpawnSystem(StormType.DenseFog, loc, lead, 0, true);
+			return;
+		}
+		// 温带气旋：大尺度锋面系统，低概率出现
+		if (UnityEngine.Random.value < 0.10f)
+		{
+			SpawnSystem(StormType.ExtratropicalCyclone, loc, lead, 0, true);
+			return;
+		}
+		// 其余为对流族（原抽签：单体 55% / 多单体 15% / 超级单体 30%）
+		StormType t = (UnityEngine.Random.value < 0.55f) ? StormType.Cell : ((UnityEngine.Random.value < 0.7f) ? StormType.Multicell : StormType.Supercell);
 		SpawnSystem(t, loc, lead, 0, true);   // 自然生成静默（不弹提示）
 	}
 
@@ -989,11 +1034,22 @@ public class TyphoonManager : MonoBehaviour
 			{
 				break;
 			}
-			// 类型：对流为主（Cell/Multicell/Supercell），台风概率 preSpawnTyphoonChance。
+			// 类型：对流为主（Cell/Multicell/Supercell），台风概率 preSpawnTyphoonChance；
+			// 2026-09-12 扩展：其余概率分给 6 类新天气（温带气旋/冬季风暴/大气河/浓雾/沙尘暴/尘卷风），
+			// 让进存档时天气图景多样（不再只有对流族）。
 			float r = UnityEngine.Random.value;
-			StormType t = (r < TyphoonConfig.I.preSpawnTyphoonChance) ? StormType.Typhoon
-				: ((r < TyphoonConfig.I.preSpawnTyphoonChance + 0.55f) ? StormType.Cell
-				: ((r < TyphoonConfig.I.preSpawnTyphoonChance + 0.8f) ? StormType.Multicell : StormType.Supercell));
+			float tp = TyphoonConfig.I.preSpawnTyphoonChance;
+			StormType t;
+			if (r < tp) t = StormType.Typhoon;
+			else if (r < tp + 0.40f) t = StormType.Cell;
+			else if (r < tp + 0.55f) t = StormType.Multicell;
+			else if (r < tp + 0.72f) t = StormType.Supercell;
+			else if (r < tp + 0.80f) t = StormType.ExtratropicalCyclone;
+			else if (r < tp + 0.87f) t = StormType.WinterStorm;
+			else if (r < tp + 0.91f) t = StormType.AtmosphericRiver;
+			else if (r < tp + 0.95f) t = StormType.DenseFog;
+			else if (r < tp + 0.98f) t = StormType.DustStorm;
+			else t = StormType.DustDevil;
 			// 距离 40-140km 沿经度偏移（避开玩家视线 ±20°，比自然生成的 12-62km 更远，不"贴脸"出现）。
 			double lead = (double)UnityEngine.Random.Range(40000f, 140000f) * (UnityEngine.Random.value < 0.5f ? 1.0 : -1.0);
 			SpawnSystem(t, pl, lead, 0, true);
@@ -1227,7 +1283,15 @@ public class TyphoonManager : MonoBehaviour
 		{
 			// 强度切换走 SetCategory（vmaxTarget 平滑过渡 ~3 秒，粒子过渡动画；
 			// 附属现象强度同步跟母体）；手动切档重置自然发展进度。
-			selected.SetCategory((selected.category + 1) % 7);
+			if (selected.type == StormType.Typhoon && selected.category >= 6)
+			{
+				selected.MakeHypercane();   // 满档台风再 +1 → 超级飓风（指挥中心手动触发）
+				Msg("超级飓风 Hypercane 已激活（峰值 ≈800 km/h）");
+			}
+			else
+			{
+				selected.SetCategory((selected.category + 1) % 7);
+			}
 			selected.naturalProgress = 0.0;
 			// （专项 A 可选）— F8 手动切档回补能量到 80（"手动强化=回满成熟能量"，
 			// god mode 期待落地；仍守 80 封顶不破设计）。
@@ -1376,6 +1440,22 @@ public class TyphoonManager : MonoBehaviour
 		catch
 		{
 			return null;
+		}
+	}
+
+	// 玩家沿行星轨道的切向速度（米/游戏秒，+角为正）：切向单位向量（+角）= (-sinθ, cosθ)，
+	// velocity 与 position 同参考系。供龙卷预警把飞船自身移动计入"接近速度"。
+	private static double PlayerOrbitSpeed(Location cam)
+	{
+		try
+		{
+			double th = cam.position.AngleRadians;
+			Double2 v = cam.velocity;
+			return v.x * (0.0 - Math.Sin(th)) + v.y * Math.Cos(th);
+		}
+		catch
+		{
+			return 0.0;
 		}
 	}
 

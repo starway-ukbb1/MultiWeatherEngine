@@ -22,9 +22,9 @@ public static class TyphoonMenuUi
 		}
 		float s = UiTheme.Scale;
 		float bw = 620f * s;
-		// 高度按内容定：标题 36 + 左栏 218（7 类）与右栏 207 取大 + 底部提示。原 432s 是
-		// 右栏从类型栏底部才开始（右上留了 ~200×280s 的空白）硬撑出来的高度。
-		float bh = 282f * s;
+		// 窗口高度固定：左侧类型栏改为「固定可见行数 + 滚轮滚动」，17 类不再把整窗撑高。
+		float railViewH = (30f * 9f + 6f) * s;        // 可见约 9 行（30s 行高），其余滚轮滚动
+		float bh = 28f * s + Mathf.Max(railViewH, 300f * s) + 20f * s;
 		float baseX = (Screen.width - bw) * 0.5f;
 		float baseY = UiTheme.TopReserve + 6f * s;
 		Rect w = new Rect(baseX + offset.x, baseY + offset.y, bw, bh);
@@ -75,14 +75,29 @@ public static class TyphoonMenuUi
 		py += 28f * s;
 		float top = py;   // 左右两栏共同的顶（原实现右栏从类型栏底部才开始 → 右上空白）
 
-		// ---- 左：类型栏 ----
+		// ---- 左：类型栏（固定可见行数 + 滚轮滚动 + 每类小图标）----
 		float railW = 300f * s;
 		float rowH = 30f * s;
-		UiTheme.Fill(new Rect(px, py, railW, rowH * WeatherSystem.Spec.Length + 8f * s), UiTheme.A(UiTheme.PanelDeep, 0.55f));
+		float railX = px, railY = py;
+		UiTheme.Fill(new Rect(railX, railY, railW, railViewH), UiTheme.A(UiTheme.PanelDeep, 0.55f));
+		// 滚轮滚动（仅悬停类型栏时）
+		if (e.type == EventType.ScrollWheel && new Rect(railX, railY, railW, railViewH).Contains(e.mousePosition))
+		{
+			float contentH = rowH * WeatherSystem.Spec.Length + 8f * s;
+			float maxScroll = Mathf.Max(0f, contentH - railViewH);
+			listScroll = Mathf.Clamp(listScroll + e.delta.y * 22f * s, 0f, maxScroll);
+			e.Use();
+		}
+		GUI.BeginGroup(new Rect(railX, railY, railW, railViewH));   // 裁剪视口
 		for (int i = 0; i < WeatherSystem.Spec.Length; i++)
 		{
 			WeatherSystem.TypeSpec sp = WeatherSystem.Spec[i];
-			Rect row = new Rect(px + 3f * s, py + 4f * s + rowH * i, railW - 6f * s, rowH - 3f * s);
+			float ry = 4f * s + rowH * i - listScroll;
+			if (ry + (rowH - 3f * s) < 0f || ry > railViewH)   // 视口外跳过绘制
+			{
+				continue;
+			}
+			Rect row = new Rect(3f * s, ry, railW - 6f * s, rowH - 3f * s);
 			bool sel = i == main.selectedType;
 			if (sel)
 			{
@@ -90,19 +105,31 @@ public static class TyphoonMenuUi
 			}
 			Color accent = UiTheme.IntensityOf(sp.defaultCat);
 			UiTheme.Fill(new Rect(row.x, row.y + 3f * s, 3f * s, row.height - 6f * s), accent);
-			// 名称固定占上半个行高（原实现用整行高 + MiddleLeft 居中，和贴底的类型描述
-			// 在 15-19s 区间是重叠的 —— 两行字糊在一起）
-			UiTheme.DrawText(new Rect(row.x + 9f * s, row.y + 1f * s, railW - 100f * s, 14f * s), sp.name, Mathf.RoundToInt(12f * s),
+			// 类型小图标（图元绘制，无需外部图片）
+			Rect ir = new Rect(row.x + 8f * s, row.y + (row.height - 18f * s) * 0.5f, 18f * s, 18f * s);
+			DrawTypeIcon(ir, (StormType)i);
+			float tx = row.x + 30f * s;
+			UiTheme.DrawText(new Rect(tx, row.y + 1f * s, railW - 122f * s, 14f * s), sp.name, Mathf.RoundToInt(12f * s),
 				sel ? UiTheme.TextHover : UiTheme.A(UiTheme.Text, 0.92f));
-			// 类型特征小条（默认等级/上限）
+			// 类型特征小条（类型专属等级名 + 上限档）
 			UiTheme.DrawText(new Rect(row.xMax - 92f * s, row.y, 84f * s, row.height),
-				"C" + sp.defaultCat + " ≤C" + sp.maxCat, Mathf.RoundToInt(9.5f * s), UiTheme.A(UiTheme.Staging, 0.9f), TextAnchor.MiddleRight);
+				WeatherSystem.StrengthName((StormType)i, sp.defaultCat) + " ≤" + sp.maxCat, Mathf.RoundToInt(9.5f * s), UiTheme.A(UiTheme.Staging, 0.9f), TextAnchor.MiddleRight);
 			if (GUI.Button(row, GUIContent.none, UiTheme.Hit()))
 			{
 				main.selectedType = i;
 				SpawnAtView(main, (StormType)i);
 			}
-			UiTheme.DrawText(new Rect(row.x + 9f * s, row.y + row.height - 12f * s, railW - 100f * s, 11f * s), sp.desc, Mathf.RoundToInt(9f * s), UiTheme.A(UiTheme.Text, 0.4f));
+			UiTheme.DrawText(new Rect(tx, row.y + row.height - 12f * s, railW - 122f * s, 11f * s), sp.desc, Mathf.RoundToInt(9f * s), UiTheme.A(UiTheme.Text, 0.4f));
+		}
+		GUI.EndGroup();
+		// 滚动条（内容超出时）
+		float contentH2 = rowH * WeatherSystem.Spec.Length + 8f * s;
+		if (contentH2 > railViewH + 0.5f)
+		{
+			float barX = railX + railW - 4f * s;
+			float thumbH = Mathf.Max(18f * s, railViewH * railViewH / contentH2);
+			float thumbY = railY + listScroll * (railViewH - thumbH) / (contentH2 - railViewH);
+			UiTheme.Fill(new Rect(barX, thumbY, 3f * s, thumbH), UiTheme.A(UiTheme.Text, 0.25f));
 		}
 		// ---- 右：选中系统快照（顶部）+ 附加现象 + 全局操作 ----
 		float ox = px + railW + 14f * s;
@@ -191,7 +218,15 @@ public static class TyphoonMenuUi
 		{
 			if (hasSel)
 			{
-				sel2.SetCategory((sel2.category + 1) % 7);
+				if (sel2.type == StormType.Typhoon && sel2.category >= 6)
+				{
+					sel2.MakeHypercane();   // 满档台风再 +1 → 超级飓风（指挥中心触发）
+					TyphoonManager.Msg("超级飓风 Hypercane 已激活（峰值 ≈800 km/h）");
+				}
+				else
+				{
+					sel2.SetCategory((sel2.category + 1) % 7);
+				}
 				sel2.naturalProgress = 0.0;
 				sel2.energy = System.Math.Max(sel2.energy, 80.0);
 				TyphoonManager.Msg(WeatherSystem.TypeName(sel2.type) + " 强度 → " + WeatherSystem.StrengthName(sel2.type, sel2.category) + " (" + sel2.vmaxTarget.ToString("0") + " m/s)");
@@ -201,7 +236,7 @@ public static class TyphoonMenuUi
 		// ③ 底部提示
 		UiTheme.Fill(new Rect(px, w.yMax - 20f * s, w.width - 24f * s, 1f), UiTheme.A(UiTheme.Text, 0.12f));
 		UiTheme.DrawText(new Rect(px, w.yMax - 17f * s, w.width - 24f * s, 13f * s),
-			"F6 关闭菜单 · F9 底部活跃系统列表 · F7 解散选中 · F8 强度 +1 · 雷达与龙卷预报见右上",
+			"F6 关闭菜单 · 滚轮滚动类型 · F9 底部活跃系统列表 · F7 解散选中 · F8 强度 +1 · 雷达与龙卷预报见右上",
 			Mathf.RoundToInt(9.5f * s), UiTheme.A(UiTheme.Text, 0.45f));
 	}
 
@@ -231,5 +266,139 @@ public static class TyphoonMenuUi
 		bool down = GUI.Button(r, label, UiTheme.Button(Mathf.RoundToInt(11f * s)));
 		UiTheme.Fill(new Rect(r.x, r.yMax - 2f * s, r.width, 2f * s), UiTheme.A(accent, down ? 0.9f : 0.5f));
 		return down;
+	}
+
+	// ===== 类型小图标（纯图元绘制，无外部图片）=====
+	private static float listScroll;                 // 类型栏滚动偏移
+	private static Texture2D discTex;                // 一次性生成的软边圆（用于旋风眼/雪/云）
+	private static Texture2D DiscTex
+	{
+		get
+		{
+			if (discTex == null)
+			{
+				discTex = MakeDisc();
+			}
+			return discTex;
+		}
+	}
+
+	// 每类图标颜色（按族区分，便于一眼辨认）
+	private static Color IconColor(StormType t)
+	{
+		switch (t)
+		{
+		case StormType.Typhoon: return new Color(0.30f, 0.80f, 0.95f, 1f);   // 青
+		case StormType.Megastorm: return new Color(0.62f, 0.52f, 0.86f, 1f);  // 紫
+		case StormType.PolarVortex: return new Color(0.66f, 0.86f, 1.0f, 1f); // 冰蓝
+		case StormType.ExtratropicalCyclone: return new Color(0.56f, 0.66f, 0.82f, 1f);
+		case StormType.Cell: case StormType.Multicell: case StormType.Supercell: case StormType.MCS:
+			return new Color(0.72f, 0.56f, 0.90f, 1f);                         // 云紫
+		case StormType.SquallLine: case StormType.AtmosphericRiver: case StormType.Derecho:
+			return new Color(0.45f, 0.86f, 0.55f, 1f);                         // 绿（线状）
+		case StormType.DustStorm: case StormType.DustDevil:
+			return new Color(0.82f, 0.70f, 0.45f, 1f);                         // 沙
+		case StormType.WinterStorm: case StormType.IceStorm:
+			return new Color(0.86f, 0.93f, 1.0f, 1f);                          // 雪白
+		case StormType.DenseFog: return new Color(0.70f, 0.72f, 0.75f, 1f);    // 灰
+		case StormType.Firestorm: return new Color(0.98f, 0.45f, 0.18f, 1f);   // 火橙
+		default: return new Color(0.7f, 0.7f, 0.7f, 1f);
+		}
+	}
+
+	private static Color Tint(Color c, float m)
+	{
+		return new Color(Mathf.Clamp01(c.r * m), Mathf.Clamp01(c.g * m), Mathf.Clamp01(c.b * m), c.a);
+	}
+
+	// 在 ir 内绘制该类型的示意图标
+	private static void DrawTypeIcon(Rect ir, StormType t)
+	{
+		Color prev = GUI.color;
+		Color col = IconColor(t);
+		bool cyclone = t == StormType.Typhoon || t == StormType.Megastorm || t == StormType.PolarVortex;
+		bool cloud = t == StormType.Cell || t == StormType.Multicell || t == StormType.Supercell || t == StormType.MCS;
+		bool line = t == StormType.SquallLine || t == StormType.AtmosphericRiver || t == StormType.Derecho;
+		bool dust = t == StormType.DustStorm || t == StormType.DustDevil;
+		bool winter = t == StormType.WinterStorm || t == StormType.IceStorm;
+		bool fire = t == StormType.Firestorm;
+		if (line || t == StormType.DenseFog)
+		{
+			// 横条（线状降雨带 / 贴地雾层）
+			UiTheme.Fill(new Rect(ir.x, ir.y + ir.height * 0.35f, ir.width, ir.height * 0.30f), col);
+			if (line)   // 弓形隆起（飑线/德雷科特征）
+			{
+				UiTheme.Fill(new Rect(ir.x + ir.width * 0.28f, ir.y + ir.height * 0.08f, ir.width * 0.44f, ir.height * 0.32f), col);
+			}
+		}
+		else
+		{
+			// 圆形主体
+			GUI.color = col;
+			GUI.DrawTexture(ir, DiscTex, ScaleMode.StretchToFill, true);
+			if (cyclone || t == StormType.ExtratropicalCyclone)
+			{
+				// 眼（深色挖空）+ 旋臂（竖条）
+				GUI.color = new Color(0.08f, 0.10f, 0.14f, 1f);
+				GUI.DrawTexture(new Rect(ir.x + ir.width * 0.34f, ir.y + ir.height * 0.34f, ir.width * 0.32f, ir.height * 0.32f), DiscTex, ScaleMode.StretchToFill, true);
+				GUI.color = col;
+				GUI.DrawTexture(new Rect(ir.x + ir.width * 0.45f, ir.y + ir.height * 0.10f, ir.width * 0.12f, ir.height * 0.80f), DiscTex, ScaleMode.StretchToFill, true);
+			}
+			else if (cloud)
+			{
+				// 上方小云突（浅色）
+				GUI.color = Tint(col, 1.3f);
+				GUI.DrawTexture(new Rect(ir.x + ir.width * 0.08f, ir.y, ir.width * 0.48f, ir.height * 0.46f), DiscTex, ScaleMode.StretchToFill, true);
+			}
+			else if (winter)
+			{
+				// 雪花：十字 + 斜叉
+				Color w = new Color(0.92f, 0.96f, 1.0f, 1f);
+				UiTheme.Fill(new Rect(ir.x + ir.width * 0.46f, ir.y + ir.height * 0.10f, ir.width * 0.08f, ir.height * 0.80f), w);
+				UiTheme.Fill(new Rect(ir.x + ir.width * 0.10f, ir.y + ir.height * 0.46f, ir.width * 0.80f, ir.height * 0.08f), w);
+				UiTheme.Fill(new Rect(ir.x + ir.width * 0.20f, ir.y + ir.height * 0.20f, ir.width * 0.60f, ir.height * 0.08f), w);
+				UiTheme.Fill(new Rect(ir.x + ir.width * 0.20f, ir.y + ir.height * 0.72f, ir.width * 0.60f, ir.height * 0.08f), w);
+			}
+			else if (dust)
+			{
+				// 尘锥：上窄下宽（三条横条）
+				for (int k = 0; k < 3; k++)
+				{
+					float f = k / 3f;
+					UiTheme.Fill(new Rect(ir.x + ir.width * (0.30f + f * 0.16f), ir.y + ir.height * (0.16f + f * 0.26f), ir.width * (0.40f - f * 0.28f), ir.height * 0.16f), col);
+				}
+			}
+			else if (fire)
+			{
+				// 火苗：底宽顶尖（三条横条收窄）
+				for (int k = 0; k < 3; k++)
+				{
+					float f = k / 3f;
+					UiTheme.Fill(new Rect(ir.x + ir.width * (0.22f + f * 0.20f), ir.y + ir.height * (0.56f - f * 0.18f), ir.width * (0.56f - f * 0.38f), ir.height * 0.18f), col);
+				}
+			}
+		}
+		GUI.color = prev;
+	}
+
+	// 生成 64×64 软边圆纹理（白色 + alpha），靠 GUI.color 着色
+	private static Texture2D MakeDisc()
+	{
+		Texture2D t = new Texture2D(64, 64, TextureFormat.ARGB32, false);
+		Color[] c = new Color[64 * 64];
+		for (int y = 0; y < 64; y++)
+		{
+			for (int x = 0; x < 64; x++)
+			{
+				float dx = (x - 31.5f) / 31.5f;
+				float dy = (y - 31.5f) / 31.5f;
+				float d = Mathf.Sqrt(dx * dx + dy * dy);
+				float a = Mathf.Clamp01(1f - (d - 0.84f) / 0.16f);
+				c[y * 64 + x] = new Color(1f, 1f, 1f, a);
+			}
+		}
+		t.SetPixels(c);
+		t.Apply();
+		return t;
 	}
 }

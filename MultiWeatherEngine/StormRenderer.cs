@@ -77,6 +77,10 @@ public class StormRenderer : MonoBehaviour
 	private RenderSet far;
 	private RenderSet A; // active set used by the build functions
 
+	// 渲染架构 B：shader 程序噪声云（mwe_shaders bundle 存在时替换 canopy/cloud 粒子云体；
+	// 附属现象/雨/天空仍走原路径。bundle 缺失 = null → 完整回退粒子云）。
+	internal StormShaderCloud shaderCloud;
+
 	private Texture2D atlas;
 	private Texture2D whiteTex;
 	private Material mat;
@@ -197,6 +201,11 @@ public class StormRenderer : MonoBehaviour
 	private void Awake()
 	{
 		BuildAssets();
+		// 渲染架构 B：shader 云可用时挂 shader 渲染组件（Rebuild 据此清零粒子云体）
+		if (StormShaderCloud.Available)
+		{
+			shaderCloud = gameObject.AddComponent<StormShaderCloud>();
+		}
 	}
 
 	private void BuildAssets()
@@ -479,8 +488,10 @@ public class StormRenderer : MonoBehaviour
 	public void Rebuild()
 	{
 		TyphoonConfig i = TyphoonConfig.I;
-		canopyN = Mathf.Clamp(i.canopyPuffs, 0, 4000);
-		cloudN = Mathf.Clamp(i.cloudPuffs, 0, 4000);
+		// 渲染架构 B：shader 云生效时云体粒子清零（附属现象预留逻辑照旧）
+		bool sc = StormShaderCloud.Available;
+		canopyN = sc ? 0 : Mathf.Clamp(i.canopyPuffs, 0, 4000);
+		cloudN = sc ? 0 : Mathf.Clamp(i.cloudPuffs, 0, 4000);
 		// 雨密度 ×3（用户要求）：rainDrops(1700) ×3 钳 12000。
 		int num = Mathf.Clamp(i.rainDrops * 3, 0, 12000);
 		puffs = new Puff[canopyN + cloudN];
@@ -610,6 +621,10 @@ public class StormRenderer : MonoBehaviour
 	{
 		SetVisible(near, v);
 		SetVisible(far, v);
+		if (shaderCloud != null)
+		{
+			shaderCloud.SetVisible(v);
+		}
 	}
 
 	private void SetVisible(RenderSet s, bool v)
@@ -650,7 +665,9 @@ public class StormRenderer : MonoBehaviour
 		// 台风：眼壁环+雨带（原样）
 		// 飑线：沿线(经度方向)拉长的云带
 		// 单体类(单体/多单体/超级单体/MCS)：中心云团（无风眼）
-		bool isLine = S.type == StormType.SquallLine;
+		// 扩展（2026-09-12）：大气河是长带水汽输送（复用线状云带形态）；尘卷风贴地小
+		// 尘旋走默认中心云团（无眼壁）；温带气旋的逗点云盾也走默认大云团。
+		bool isLine = S.type == StormType.SquallLine || S.type == StormType.AtmosphericRiver || S.type == StormType.Derecho || S.type == StormType.DustStorm;
 		bool isRotary = S.type == StormType.Typhoon;
 		if (kind == 0)
 		{
@@ -683,6 +700,12 @@ public class StormRenderer : MonoBehaviour
 					}
 				}
 				num2 = Math.Pow(Random.value, 0.6) * 0.92 + 0.06;
+			}
+			else if (S.type == StormType.DustDevil)
+			{
+				// 尘卷风大改：贴地细高尘柱——径向窄（近轴）、全高度分布，配合 BuildBack 锥形遮罩成柱。
+				num = Random.Range(0.0f, 0.16f);
+				num2 = Random.value;
 			}
 			else
 			{
@@ -734,6 +757,12 @@ public class StormRenderer : MonoBehaviour
 				// 环流注入：台风主体云出生偏底部眼壁（眼壁上升气流入口）——
 				// 眼壁环流持续供料（同飑线/单体，指数 >1 偏底部）。
 				num2 = Math.Pow(Random.value, 1.8) * 1.0 + 0.05;
+			}
+			else if (S.type == StormType.DustDevil)
+			{
+				// 尘卷风大改：细高尘柱（小 puff 同样近轴、全高度）
+				num = Random.Range(0.0f, 0.16f);
+				num2 = Random.value;
 			}
 			else
 			{
@@ -1011,6 +1040,11 @@ public class StormRenderer : MonoBehaviour
 		A.backGO.transform.rotation = goRot;
 		A.frontGO.transform.rotation = goRot;
 		A.skyGO.transform.rotation = goRot;
+		// 渲染架构 B：shader 云 quad 与 backGO 同锚定（顶点相对风暴中心；far 预乘 farAbsS）
+		if (shaderCloud != null)
+		{
+			shaderCloud.FrameUpdate(S, anchor, farAbs, farAbsS, layer, spawnAnimT);
+		}
 
 		// 置顶机制（材质 ZTest/queue/sorting，恒开）不再每帧重设：这些值在
 		// BuildAssets/Rebuild 里已设好且运行期不变，每帧重设只会反复把材质与渲染器标脏。
@@ -1214,8 +1248,8 @@ public class StormRenderer : MonoBehaviour
 
 	private void UpdateLightning(float dt)
 	{
-		// 沙尘暴无闪电（干燥系统）：直接禁用
-		if (!TyphoonConfig.I.lightning || S.type == StormType.DustStorm)
+		// 干燥/静稳系统无闪电（沙尘暴/浓雾/尘卷风）：直接禁用
+		if (!TyphoonConfig.I.lightning || WeatherSystem.NoLightning(S.type))
 		{
 			flashPower = 0f;
 			return;
@@ -1283,6 +1317,19 @@ public class StormRenderer : MonoBehaviour
 				case StormType.SquallLine: baseVis = 1000.0; break;
 				case StormType.MCS: baseVis = 1500.0; break;
 				case StormType.Typhoon: baseVis = 1200.0; break;
+				// 扩展类型（2026-09-12）：暴雪 400 / 浓雾 120 最浓（贴地雾层）
+				case StormType.ExtratropicalCyclone: baseVis = 1100.0; break;
+				case StormType.WinterStorm: baseVis = 400.0; break;
+				case StormType.IceStorm: baseVis = 600.0; break;
+				case StormType.DenseFog: baseVis = 120.0; break;
+				case StormType.AtmosphericRiver: baseVis = 1000.0; break;
+				case StormType.DustDevil: baseVis = 500.0; break;
+				// 理论/极端风暴（2026-09-13）：焰风暴烟尘 300 / 德雷科暴雨 700 /
+				// 极地涡旋雪盲 500 / 超级风暴 250（假想全球系统，能见度极差）
+				case StormType.Firestorm: baseVis = 300.0; break;
+				case StormType.Derecho: baseVis = 700.0; break;
+				case StormType.PolarVortex: baseVis = 500.0; break;
+				case StormType.Megastorm: baseVis = 250.0; break;
 				default: baseVis = 1500.0; break;
 			}
 			double inten = Mathf.Clamp01((float)(s.Vmax / 45.0));
@@ -1305,9 +1352,25 @@ public class StormRenderer : MonoBehaviour
 		// atmoClass==2 云色向行星表面基准色偏移（GetTerrainColor 采样纹理——贴图从北极
 		// 投影，UV 映射 SFS 内部处理），atmoClass==1 金星硫酸云偏黄；地球类保持白色。
 		// 沙尘暴固定沙色（干燥系统，不管行星大气分级——沙尘层本色）。
-		if (s.type == StormType.DustStorm)
+		if (s.type == StormType.Firestorm)
 		{
-			cloudTint = new Color(0.88f, 0.74f, 0.52f);   // 沙黄
+			cloudTint = new Color(0.95f, 0.46f, 0.20f);   // 火焰风暴：炽热橙红（火积雨云/烟柱）
+		}
+		else if (s.type == StormType.PolarVortex)
+		{
+			cloudTint = new Color(0.84f, 0.90f, 1.0f);    // 极地涡旋：冷白蓝
+		}
+		else if (s.type == StormType.Megastorm)
+		{
+			cloudTint = new Color(0.52f, 0.46f, 0.62f);   // 超级风暴：暗紫灰（假想）
+		}
+		else if (WeatherSystem.IsDusty(s.type))
+		{
+			// 沙尘暴/尘卷风固定沙色（干燥系统，沙尘本色，不管大气分级）；
+			// 尘卷风更淡更亮（小尺度尘柱，扬起的是地表细沙不是遮天沙墙）
+			cloudTint = (s.type == StormType.DustDevil)
+				? new Color(0.92f, 0.83f, 0.66f)
+				: new Color(0.88f, 0.74f, 0.52f);
 		}
 		else if (s.atmoClass == 2)
 		{
@@ -1421,8 +1484,9 @@ public class StormRenderer : MonoBehaviour
 			// 台风眼壁 0.45→0.6（眼壁内外更柔和）；单体径向衰减 1.15→1.7（渐隐范围更大）；
 			// 非台风云缘统一加碎絮噪声（边缘过渡带按 seed 径向正弦扰动）→
 			// 云团边缘破碎蓬松，不再是一条规则圆弧硬边怼着蓝天。
-			bool isRot = s.type == StormType.Typhoon;
-			bool isLine = s.type == StormType.SquallLine;
+			bool isRot = (s.type == StormType.Typhoon);   // 仅台风有眼+眼壁；极地涡旋/超级风暴为冷心大涡旋，无暖心眼
+			bool isColdVortex = (s.type == StormType.PolarVortex || s.type == StormType.Megastorm);   // 冷心弥散涡旋（螺旋/逗点，无眼）
+			bool isLine = (s.type == StormType.SquallLine || s.type == StormType.AtmosphericRiver || s.type == StormType.Derecho || s.type == StormType.DustStorm);   // 大气河/德雷科/沙尘暴 也是长带
 			double num6;
 			if (isRot)
 			{
@@ -1488,12 +1552,37 @@ public class StormRenderer : MonoBehaviour
 			}
 			else if (isLine)
 			{
-				// 飑线弓形剖面（形态签名：审查"飑线最大的错是对称"——改沿 s 非对称：
-				// 前缘低弧云墙（ro 0.7 峰）+ 中段高塔 + 尾部低平层状雨盾）。2D 横截面：
-				// 前缘云墙→高塔→尾部层状区沿移动方向展开。
-				double front = Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 0.7) / 0.55));
-				double tail = 0.4 * Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 1.8) / 1.3));
-				num6 = 0.3 + 0.7 * front + tail;
+				// 线状系统非对称剖面（弓形回波 / Haboob 尘墙）：风暴整体沿 +s 方向移动
+				// （CenterVelocity 沿 +s，见 WeatherSystem.cs:2399），故 +sd=迎风前缘、-sd=背风尾迹。
+				// 必须用带符号 sd 而非 num3=|s2|/Rmax，否则前/后峰会对称地挂在中心两侧（这才是"还是对称"的根因）。
+				double sd = s2 / s.Rmax;                          // 带符号，约 [-4.2,+4.2]
+				double wallPos = 2.8;                             // 陡墙落在 +s 前段（运动前缘）
+				double wall = Math.Exp(0.0 - WeatherSystem.Pow2((sd - wallPos) / 0.5));     // 迎风陡墙
+				double wake = (sd < wallPos)
+					? Math.Exp((sd - wallPos) / 1.7)             // 背风尾盾：向 -s 指数渐散
+					: Math.Exp(0.0 - (sd - wallPos) / 1.2);      // 迎风前方（墙以远）淡出
+				// 垂直：迎风墙贯通整层（高耸塔/尘墙），尾盾压低成层状（底浓顶稀）
+				double hFactor = (sd < wallPos) ? (1.0 - 0.55 * Smooth01(num4)) : 1.0;
+				num6 = (0.16 + 0.92 * wall + 0.5 * wake) * hFactor;
+			}
+			else if (isColdVortex)
+			{
+				// 冷心大涡旋（极地涡旋/超级风暴）：无台风眼/眼壁，弥散大尺度涡旋 + 螺旋云带。
+				// 现实：极地涡旋/强温带气旋是冷心系统，云系呈螺旋/逗点弥散，不应出现清晰眼壁。
+				double spread = (s.type == StormType.Megastorm) ? 2.8 : 1.9;   // 超级风暴尺度更大更弥散
+				double coreW = (s.type == StormType.Megastorm) ? 0.55 : 0.75;
+				num6 = coreW - Smooth01((num3 - 0.25) / spread);
+				if (num6 < 0.0) num6 = 0.0;
+				// 基线非对称（冷心涡旋常呈逗点/螺旋，不该是完美圆盘）：带符号 s2 朝一侧偏置，
+				// 不再依赖 gated 的 commaK（常为零），保证极地涡旋/超级风暴整体非对称。
+				double lean = s2 / s.Rmax;
+				num6 *= 0.65 + 0.5 * Smooth01(0.5 + 0.7 * lean);
+				// 轻微逗点偏移（大尺度涡旋非对称）：整体云偏向一侧
+				if (s.commaK > 0.01)
+				{
+					double dirE = (s2 * s.commaDir) / s.Rmax;
+					num6 *= 0.6 + 0.5 * Smooth01(dirE + 0.5);
+				}
 			}
 			else
 			{
@@ -1519,11 +1608,20 @@ public class StormRenderer : MonoBehaviour
 					wCell = 1.2;
 				}
 				num6 = 1.0 - Smooth01((num3 - 0.35) / wCell);
+				// 温带气旋标志性逗点云盾：主云团偏侧 + 逗点尾臂（沿逗点方向非对称拉长）。
+				if (s.type == StormType.ExtratropicalCyclone && s.commaK > 0.01)
+				{
+					double dirE = (s2 * s.commaDir) / s.Rmax;
+					double head = Smooth01(dirE + 0.6);
+					double tailArm = 0.5 * Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 2.2) / 1.5)) * Smooth01(0.0 - dirE);
+					num6 = num6 * (0.55 + 0.85 * head) + tailArm * s.commaK;
+					num6 *= 1.0 - 0.25 * s.commaK;
+				}
 			}
 			// R2 螺旋调制（审查🔴-R2：台风=眼+实心圆盘，无 moat 无螺旋）：粒子切向
 			// 坐标 s2 相干斜条纹 = 螺旋雨带/云带投影（seed 每粒子常数只出点状花斑，s2 全局
 			// 坐标才出相干螺旋错觉）。独立 if（不挂 if-else 链，链已闭合）。
-			if (isRot)
+			if (isRot || isColdVortex)
 			{
 				// 逗点化时螺旋减弱（残余低压结构松散，螺旋雨带模糊消失）
 				num6 *= 0.6 + 0.4 * (1.0 - 0.6 * s.commaK) * Math.Sin((s2 / s.Rmax) * 4.2 - num3 * 1.2 + (double)puff.seed * 0.3);
@@ -1538,7 +1636,7 @@ public class StormRenderer : MonoBehaviour
 			else if (s.type == StormType.MCS)
 			{
 				// MCS：顶部平砧（高 h 水平宽层）+ 中心 3-5 核塔凸起（num3 正弦塔状）。
-				double anvil = Math.Exp(0.0 - WeatherSystem.Pow2((num4 - 0.92) / 0.14)) * Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 1.2) / 1.1));
+				double anvil = Math.Exp(0.0 - WeatherSystem.Pow2((num4 - 0.92) / 0.14)) * Math.Exp(0.0 - WeatherSystem.Pow2((num3 - 1.6) / 1.1));
 				double tower = 0.25 * Math.Sin(num3 * 7.0 + (double)puff.seed * 6.283) * Math.Exp(0.0 - WeatherSystem.Pow2((num4 - 0.6) / 0.35));
 				num6 += 0.5 * anvil + tower;
 			}
@@ -1546,6 +1644,19 @@ public class StormRenderer : MonoBehaviour
 			{
 				// 多单体：3-5 塔群并排（num3 周期调制形成柱状群），钳 1.2 防 alpha 溢出。
 				num6 = Math.Min(1.2, num6 * (1.0 + 0.35 * Math.Sin(num3 * 6.0 + (double)puff.seed * 4.0)));
+			}
+			else if (s.type == StormType.DustDevil)
+			{
+				// 尘卷风大改：细长旋转尘柱——近轴尘粒保留，按高度放宽允许半径 → 底部窄、顶部尘羽外张的锥形柱。
+				double colR = 0.05 + 0.22 * num4;
+				double mask = 1.0 - Smooth01((num3 - colR) / 0.10);
+				num6 *= mask;
+			}
+			else if (s.type == StormType.WinterStorm || s.type == StormType.IceStorm)
+			{
+				// 冬季风暴/冰暴：大范围降雪/冻雨盾，向一侧（锋面）偏密——轻量不对称，去纯圆盘感。
+				double dirE = s2 / s.Rmax;
+				num6 *= 0.7 + 0.5 * Smooth01(dirE + 0.6);
 			}
 			if (!isRot)
 			{
@@ -1946,6 +2057,104 @@ public class StormRenderer : MonoBehaviour
 				}
 			}
 		}
+		// 尘卷风大改：细长旋转尘柱（晴空干燥热对流涡旋）——柱状核心 + 螺旋尘纹 + 触地卷尘环。
+		// 现实：直径 10-100m、高 10-1000m、强旋贴地尘柱。SFS 2D 侧视下用"扭转柱+螺旋尘纹"表现旋转。
+		if (S.type == StormType.DustDevil && S.planet != null && num2 < A.backQuads)
+		{
+			Double2 stormC = S.MergedStormC();
+			Double2 radialP = stormC.normalized;
+			Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);
+			double colH = S.Htop;
+			double colR = S.Rmax * 0.5;
+			double spin = S.age * 6.0;
+			int layers = 16;
+			for (int li = 0; li < layers && num2 < A.backQuads; li++)
+			{
+				double t = (double)li / (double)(layers - 1);
+				double hh = colH * t;
+				double wob = colR * (0.18 + 0.5 * t) * Math.Sin(t * 9.0 + spin);
+				double halfW = colR * (0.10 + 0.32 * t);
+				Double2 planetPos = stormC + radialP * hh + perpP * wob;
+				Vector2 cen = WorldView.ToLocalPosition(planetPos);
+				Vector2 qc = align ? (cen - alignOrigin) : cen;
+				float half = (float)halfW;
+				if (farAbs) { qc = (cen - alignOrigin) * (farAbsS / 10000f); half = half * farAbsS / 10000f; }
+				float a = 0.7f * torVisMul * (0.4f + 0.6f * (float)t) * mergeFade * dissolveFade * spawnAnimT;
+				WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.90f, 0.80f, 0.60f, a), 0f);
+			}
+			int streaks = 24;
+			for (int si = 0; si < streaks && num2 < A.backQuads; si++)
+			{
+				double uu = (double)((si + (int)(S.age * 4.0)) % streaks) / (double)streaks;
+				double hh = colH * uu;
+				double ang = spin * 1.2 + uu * 18.0 + (double)si;
+				double rr = colR * (0.10 + 0.34 * uu);
+				Double2 planetPos = stormC + radialP * hh + perpP * (rr * Math.Cos(ang));
+				Vector2 cen = WorldView.ToLocalPosition(planetPos);
+				Vector2 qc = align ? (cen - alignOrigin) : cen;
+				float half = (float)(colR * 0.05);
+				if (farAbs) { qc = (cen - alignOrigin) * (farAbsS / 10000f); half = half * farAbsS / 10000f; }
+				float a = 0.55f * torVisMul * (1f - 0.4f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;
+				WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.95f, 0.86f, 0.66f, a), 0f);
+			}
+			int dustN = 10;
+			for (int d = 0; d < dustN && num2 < A.backQuads; d++)
+			{
+				double ang = S.age * 6.0 + (double)d * 0.628;
+				double dustR = colR * 0.45 * (0.7 + 0.3 * Math.Sin(S.age * 3.0 + (double)d));
+				Double2 planetPos = stormC + perpP * (dustR * Math.Cos(ang));
+				Vector2 cen = WorldView.ToLocalPosition(planetPos);
+				Vector2 qc = align ? (cen - alignOrigin) : cen;
+				float half = (float)(colR * 0.18);
+				if (farAbs) { qc = (cen - alignOrigin) * (farAbsS / 10000f); half = half * farAbsS / 10000f; }
+				float a = 0.7f * (0.5f + 0.5f * (float)Math.Abs(Math.Sin(S.age * 3.0 + (double)d))) * mergeFade * dissolveFade * spawnAnimT;
+				WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(0.85f, 0.74f, 0.54f, a), 0f);
+			}
+		}
+		// 火焰风暴：上升火柱/烟羽（pyrocumulonimbus 火积雨云）——底部烈焰、中部浓烟、顶部砧状烟云。
+		if (S.type == StormType.Firestorm && S.planet != null && num2 < A.backQuads)
+		{
+			Double2 stormC = S.MergedStormC();
+			Double2 radialP = stormC.normalized;
+			Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);
+			double colH = S.Htop;
+			double colR = S.Rmax * 0.6;
+			double spin = S.age * 3.0;
+			int layers = 18;
+			for (int li = 0; li < layers && num2 < A.backQuads; li++)
+			{
+				double t = (double)li / (double)(layers - 1);
+				double hh = colH * t;
+				double wob = colR * (0.10 + 0.35 * t) * Math.Sin(t * 7.0 + spin);
+				double halfW = colR * (0.12 + 0.40 * t);
+				Double2 planetPos = stormC + radialP * hh + perpP * wob;
+				Vector2 cen = WorldView.ToLocalPosition(planetPos);
+				Vector2 qc = align ? (cen - alignOrigin) : cen;
+				float half = (float)halfW;
+				if (farAbs) { qc = (cen - alignOrigin) * (farAbsS / 10000f); half = half * farAbsS / 10000f; }
+				Color c = (t < 0.5)
+					? Color.Lerp(new Color(0.55f, 0.12f, 0.04f), new Color(0.95f, 0.46f, 0.12f), (float)(t / 0.5f))
+					: Color.Lerp(new Color(0.95f, 0.46f, 0.12f), new Color(0.42f, 0.40f, 0.40f), (float)((t - 0.5) / 0.5f));
+				float a = 0.75f * (0.3f + 0.7f * (float)t) * mergeFade * dissolveFade * spawnAnimT;
+				WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(c.r, c.g, c.b, a), 0f);
+			}
+			int streaks = 20;
+			for (int si = 0; si < streaks && num2 < A.backQuads; si++)
+			{
+				double uu = (double)((si + (int)(S.age * 5.0)) % streaks) / (double)streaks;
+				double hh = colH * uu;
+				double ang = spin * 1.5 + uu * 16.0 + (double)si;
+				double rr = colR * (0.12 + 0.42 * uu);
+				Double2 planetPos = stormC + radialP * hh + perpP * (rr * Math.Cos(ang));
+				Vector2 cen = WorldView.ToLocalPosition(planetPos);
+				Vector2 qc = align ? (cen - alignOrigin) : cen;
+				float half = (float)(colR * 0.05);
+				if (farAbs) { qc = (cen - alignOrigin) * (farAbsS / 10000f); half = half * farAbsS / 10000f; }
+				Color c = (uu < 0.4) ? new Color(1.0f, 0.7f, 0.2f) : new Color(0.5f, 0.47f, 0.45f);
+				float a = 0.5f * (1f - 0.5f * (float)uu) * mergeFade * dissolveFade * spawnAnimT;
+				WriteQuad(A.bV, A.bT, A.bC, num2++, qc, half, half, Vector2.right, new Color(c.r, c.g, c.b, a), 0f);
+			}
+		}
 		// / — 附属下击暴流：亮灰粒子从云中垂直向下冲出，近地面向四周扩散。
 		// 形成动画：alpha × 实例相位（fx.phase）逐渐增强。
 		// 下暴多实例遍历（数量限制解除 + 随机位置）。
@@ -2221,7 +2430,7 @@ public class StormRenderer : MonoBehaviour
 		// 的闪击点画一条锯齿通道：从云中层（flashH）折线落到地面（地形高度，钳 ≥0），
 		// 5 段细长 quad，只在闪光峰值（flashPower>0.35）出现，颜色冷白偏蓝。
 		// 锯齿相位由 storm.seed 决定 → 通道形态稳定（不每帧跳变），随闪光出现/消失。
-		if (TyphoonConfig.I.lightning && S.type != StormType.DustStorm && flashPower > 0.35f
+		if (TyphoonConfig.I.lightning && !WeatherSystem.NoLightning(S.type) && flashPower > 0.35f
 			&& num2 + 8 < phenomenaQuads)
 		{
 			Double2 boStorm = S.MergedStormC();
@@ -2349,8 +2558,9 @@ public class StormRenderer : MonoBehaviour
 			SkipRain();
 			return;
 		}
-		// 沙尘暴无降雨（干燥系统，只有沙尘）——整层雨隐藏
-		if (S.type == StormType.DustStorm)
+		// 无降水系统（干燥/静稳：沙尘暴/浓雾/尘卷风）——整层雨隐藏
+		// （2026-09-12 扩展：原为 DustStorm 硬编码，改由 TypeSpec.precipKind 驱动）
+		if (WeatherSystem.IsPrecipFree(S.type))
 		{
 			SkipRain();
 			return;
@@ -2507,7 +2717,10 @@ public class StormRenderer : MonoBehaviour
 		Double2 perpP = new Double2(0.0 - radialP.y, radialP.x);   // 行星全局切向（水平）
 		Vector2 radialDir = new Vector2((float)radialP.x, (float)radialP.y);   // 相机本地近似垂直（axis 长轴）
 		Vector2 perp = new Vector2((float)perpP.x, (float)perpP.y);
-		double fall = (s.age * 1.6) % 1.0;
+		// 相态（2026-09-12 扩展）：固态降水（雪/冰粒）下落远慢于雨（雪末速 ~1 m/s
+		// vs 雨 ~9.5 m/s），受风倾斜更弱、横向飘摆更大（絮状飘落）。雨保持原 1.6 相位速度。
+		bool snow = WeatherSystem.IsFrozenPrecip(s.type);
+		double fall = (s.age * (snow ? 0.6 : 1.6)) % 1.0;
 		// 雨柱触地修复（用户：雨在落到地面前就消失）：原落点 hh=0 = 海平面
 		// （FromStorm 基准 = planet.Radius），地形高于海平面（山地/高原）时雨滴到海平面
 		// 就开始淡出、实际地面还在上方 → 雨柱悬空/提前消失。改用风暴中心地形高度做落点
@@ -2541,6 +2754,10 @@ public class StormRenderer : MonoBehaviour
 		// 需 ~103m/s）：atan 映射封 80°。
 		double vH = Math.Abs(val5.x);
 		double tiltRad = Math.Min(80.0, Math.Atan(vH / 9.5) * 180.0 / Math.PI) * Math.PI / 180.0;
+		if (snow)
+		{
+			tiltRad *= 0.35;   // 雪片以重力下落为主，风只轻微带偏（雨才被吹成斜丝）
+		}
 		Vector2 vertDir = radialDir;                                  // 垂直（下落）
 		Vector2 hzDir = perp * ((val5.x >= 0f) ? 1f : -1f);           // 水平顺风方向
 		Vector2 axisRain = (vertDir * (float)Math.Cos(tiltRad) + hzDir * (float)Math.Sin(tiltRad)).normalized;
@@ -2563,7 +2780,7 @@ public class StormRenderer : MonoBehaviour
 			// 边缘稀疏：u^1.5 幂分布（u 均匀 0-1，u^1.5 偏向 0）→ 中心密、边缘稀
 			double u = ((double)((i * 2654435761u) % 10000) / 10000.0);
 			// 更随机：横向加时间摆动（雨幕横向漂移，不呆板）
-			double offsetX = (Math.Pow(u, 1.5) * 2.0 - 1.0) * lineW * 0.5 + Math.Sin((double)i * 7.31 + s.age * 3.0) * lineW * 0.14;
+			double offsetX = (Math.Pow(u, 1.5) * 2.0 - 1.0) * lineW * 0.5 + Math.Sin((double)i * 7.31 + s.age * (snow ? 1.4 : 3.0)) * lineW * (snow ? 0.26 : 0.14);
 			// 生命周期：出生淡入（云里冒头）→ 下落全亮 → 落地（tt=1）后淡出删除（负数穿地）
 			float born = Mathf.Clamp01((float)(tt / 0.1));
 			float fade = 1f - (float)Smooth(WeatherSystem.Clamp01((tt - 1.0) / 0.3));
@@ -2580,8 +2797,10 @@ public class StormRenderer : MonoBehaviour
 			Double2 planetPos = stormC + radialP * hh + perpP * offsetX;
 			Vector2 cen = WorldView.ToLocalPosition(planetPos);
 			Vector2 qc = align ? (cen - alignOrigin) : cen;
-			float hw = rainW;
-			float hl = rainL;
+			// 雪片：近方形小片（雨是细长丝）；冰暴的冻雨/冰粒更小
+			float snowHalf = rainW * ((s.type == StormType.IceStorm) ? 1.1f : 2.0f);
+			float hw = snow ? snowHalf : rainW;
+			float hl = snow ? snowHalf : rainL;
 			if (farAbs)
 			{
 				qc = (cen - alignOrigin) * (farAbsS / 10000f);
@@ -2597,6 +2816,13 @@ public class StormRenderer : MonoBehaviour
 			float proxR = (float)Smooth01((4.6 - num) / 1.6);
 			float boostR = 1f + 0.5f * Mathf.Clamp01((float)(s.Vmax / 45.0)) * proxR;
 			val8 = Color.Lerp(new Color(0.8f, 0.86f, 0.95f, Mathf.Min(1f, a)), new Color(0.95f, 0.98f, 1f, Mathf.Min(1f, a * 1.15f)), Mathf.Clamp01(boostR - 1f));
+			if (snow)
+			{
+				// 雪：纯白高亮片；冰暴的冻雨/冰粒偏冰青且略通透
+				val8 = (s.type == StormType.IceStorm)
+					? new Color(0.86f, 0.93f, 0.99f, Mathf.Min(1f, a * 0.95f))
+					: new Color(0.97f, 0.98f, 1f, Mathf.Min(1f, a * 1.1f));
+			}
 			// 泥雨（消散产物#3）：本系统附近有消散沙尘暴（muddyFactor，逻辑层
 			// 8s 节流 O(n) 算出）时雨色插向泥褐——沙尘与降水混合的"泥雨"（SAL/湿沉降
 			// 现实机制，跨系统产物）。设置开关 muddyRain 控制。

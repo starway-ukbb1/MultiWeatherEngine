@@ -17,7 +17,22 @@ public enum StormType
 	// 沙尘暴独立天气系统（用户：沙尘暴应该是独立的天气系统才对）：
 	// 不依赖雷暴——蒙古气旋/冷锋驱动的干旱区沙尘暴是独立事件。沙漠地形自然生成，
 	// 无降雨无闪电（干燥系统），沙尘层贴地 + 强水平风，可挂阵风锋（Haboob 沙墙前沿）。
-	DustStorm     // 沙尘暴（干旱区强风卷沙，沙墙推进）
+	DustStorm,    // 沙尘暴（干旱区强风卷沙，沙墙推进）
+	// ===== 扩展天气系统（现实气象普查新增，2026-09-12）=====
+	// 原 7 类集中在对流风暴族 + 热带气旋 + 沙尘暴；补齐现实里另外几类大缺失系统：
+	// 按尺度覆盖"天气尺度（温带气旋/大气河）→ 中尺度（冬季风暴/冰暴）→ 静稳（浓雾）
+	// → 小尺度（尘卷风）"，并按"相态"补齐固态降水（雪/冰粒）与零降水（雾/尘卷）。
+	ExtratropicalCyclone,  // 温带气旋（锋面气旋：冷心、冷锋/暖锋、逗点云盾，中纬度主流）
+	WinterStorm,           // 冬季风暴（暴雪：固态降水 + 强风 + 低能见度）
+	IceStorm,              // 冰暴（冻雨/冰粒：逆温层过冷雨滴，落地结冰）
+	DenseFog,              // 浓雾（辐射雾/海雾：静稳贴地雾层，能见度极低、无降水）
+	AtmosphericRiver,      // 大气河（数千公里水汽输送带：长带暴雨）
+	DustDevil,             // 尘卷风（晴空干燥热对流涡旋：贴地尘柱，数分钟）
+	// ===== 理论/极端风暴（2026-09-13 新增 4 类）=====
+	Firestorm,             // 火焰风暴（火积雨云 + 火旋风：大火自维持的超强上升气流）
+	Derecho,               // 德雷科（长生命直线风风暴：路径数百公里，飑线升级版）
+	PolarVortex,           // 极地涡旋（极地高空冷性大涡旋南下：大范围严寒风暴）
+	Megastorm              // 超级风暴（假想全球尺度超强气旋：《后天》式）
 	// 龙卷/下击暴流不再是独立系统，而是宿主系统的附属现象
 	// （龙卷产自超级单体中气旋/飑线涡旋，下击暴流产自成熟雷暴）。
 }
@@ -76,6 +91,10 @@ public class WeatherSystem
 		// 分级，现实化：升 1 档=成熟期寿命 10-20%）；maxCat==defaultCat 的类型填 0 用不上。
 		public int maxCat;
 		public double naturalUpTimeSec;
+		// 降水相态（渲染分流，2026-09-12 扩展）：0=液态雨、1=固态雪/冰粒、2=无降水。
+		// 原实现"有无降雨"是 BuildRain 里散落的硬编码判断（DustStorm 特例），扩展后
+		// 统一由本字段驱动——避免每加一个干燥/固态系统就要多改一处 if。
+		public int precipKind;     // 0 雨 / 1 雪 / 2 无
 		public string desc;        // 一句话说明
 	}
 
@@ -83,7 +102,7 @@ public class WeatherSystem
 	// 旧顺序 [台风, MCS, 超单, 飑线, 多单体, 单体] vs 枚举 [台风, Cell, Multicell, Supercell,
 	// SquallLine, MCS]——界面自洽但 type 字段逻辑分支（下暴白名单/转变链/雨轮廓）全对错类型）。
 	// 现在索引 = (int)StormType 严格一致：Typhoon=0 Cell=1 Multicell=2 Supercell=3 SquallLine=4 MCS=5 DustStorm=6。
-	public static readonly TypeSpec[] Spec = new TypeSpec[7]
+	public static readonly TypeSpec[] Spec = new TypeSpec[17]   // 7 原有 + 6 扩展 + 4 理论/极端（火焰风暴/德雷科/极地涡旋/超级风暴）
 	{
 		// 现实标定速查（三阶段时长 = energy 55→80 / 80→30 / 30→0 的游戏秒）：
 		// 台风 2.5d/5d/12h（现实生命史 5-9 天 ✓）、单体 20min/45min/20min（现实 30-60min ✓）、
@@ -156,13 +175,165 @@ public class WeatherSystem
 			vmaxMs = 28, updraft = 0.15, developSec = 14400, matureSec = 86400, dissolveSec = 28800,
 			rotate = 0.25, downburst = 0.0, line = 0.4, gustFront = 0.80,
 			tornadoHost = false, defaultCat = 2, maxCat = 4, naturalUpTimeSec = 17280,
+			precipKind = 2,
 			desc = "沙墙推进（Haboob），无降雨"
-		}   // maxCat 4（GB/T 国标 5 档）；升级 4.8h/级
+		},   // maxCat 4（GB/T 国标 5 档）；升级 4.8h/级
+		// ===================== 扩展天气系统（2026-09-12 现实气象普查新增 6 类） =====================
+		// 【7 温带气旋 ExtratropicalCyclone】锋面气旋——温带中高纬地区最主流的天气系统，
+		// 现实直径数百-3000km（平均 ~1000km，比热带气旋大）、生命史 1-7 天（典型 3-5 天）、
+		// 地面风速 15-35 m/s（强气旋可达 40+）。**冷心**（与暖心台风相反）、有冷锋/暖锋/锢囚锋、
+		// 逗点云系 + 盾状卷云罩、大范围层状降水（非深对流）。可挂阵风锋（锋面强阵风），
+		// 一般不利龙卷（不设 tornadoHost）。SFS 换算：Rmax=6371km×0.0105×0.3≈20km（大于台风 15km ✓）。
+		new TypeSpec
+		{
+			name = "温带气旋", rmaxFrac = 0.0105, htopFrac = 0.14, hbaseM = 900, aspectMin = 0.45,
+			vmaxMs = 34, updraft = 0.35, developSec = 259200, matureSec = 432000, dissolveSec = 172800,
+			rotate = 0.45, downburst = 0.10, line = 0.55, gustFront = 0.85,
+			tornadoHost = false, defaultCat = 3, maxCat = 4, naturalUpTimeSec = 64800,
+			precipKind = 0,
+			desc = "锋面气旋：冷心大系统，冷锋+暖锋+逗点云盾，中纬度"
+		},   // 三阶段 3天/5天/2天（现实生命史 1-7 天）；updraft 低（层状为主，非深对流）
+		// 【8 冬季风暴 WinterStorm】暴雪系统——中尺度降雪带 50-200km、生命 6-24h，
+		// 暴风雪判据（NWS）：持续风或阵风 ≥14 m/s 且能见度 <400m。固态降水（雪），
+		// 低云底（降雪云系低）、强风、能见度骤降。冰原/绿地高纬常发。
+		new TypeSpec
+		{
+			name = "冬季风暴", rmaxFrac = 0.006, htopFrac = 0.10, hbaseM = 600, aspectMin = 0.40,
+			vmaxMs = 26, updraft = 0.40, developSec = 14400, matureSec = 57600, dissolveSec = 21600,
+			rotate = 0.10, downburst = 0.10, line = 0.25, gustFront = 0.55,
+			tornadoHost = false, defaultCat = 2, maxCat = 3, naturalUpTimeSec = 14400,
+			precipKind = 1,
+			desc = "冬季风暴：暴雪+强风，能见度骤降（冰原/高纬）"
+		},   // Rmax≈11.5km（降雪带 50-200km 的 30% 折算）；三阶段 4h/16h/6h（现实 6-24h）
+		// 【9 冰暴 IceStorm】冻雨/冰暴——浅层逆温（暖层在冷层之上），过冷雨滴落到
+		// ≤0°C 地表结冰；冻雨带数十-数百 km、生命 6-24h、风速不高（10-20 m/s）、
+		// 低云底（冻雨云系浅薄）。相态同样是固态（冰粒/冻雨），但比暴雪弱、更通透。
+		new TypeSpec
+		{
+			name = "冰暴", rmaxFrac = 0.005, htopFrac = 0.08, hbaseM = 300, aspectMin = 0.40,
+			vmaxMs = 18, updraft = 0.30, developSec = 10800, matureSec = 43200, dissolveSec = 14400,
+			rotate = 0.05, downburst = 0.05, line = 0.15, gustFront = 0.40,
+			tornadoHost = false, defaultCat = 2, maxCat = 3, naturalUpTimeSec = 10800,
+			precipKind = 1,
+			desc = "冻雨/冰暴：逆温层过冷雨滴，落地结冰，低云"
+		},   // 低云底（300m 现实 ×0.3）、弱风、浅薄云系（htopFrac 0.08 最低档之一）
+		// 【10 浓雾 DenseFog】辐射雾/平流雾/海雾——静稳天气下的贴地凝结层，雾层厚
+		// 50-500m、生命数小时-2 天；**风速 0-5 m/s（静稳）**、能见度 50-200m（浓雾 <500m、
+		// 强浓雾 <50m）、**无降水无闪电**。极扁（aspectMin 3.0 强制云体变成贴地薄层）、
+		// 几乎无上升气流。与全部风暴形成最大反差（"没有风也能是最糟天气"）。
+		new TypeSpec
+		{
+			name = "浓雾", rmaxFrac = 0.008, htopFrac = 0.015, hbaseM = 0, aspectMin = 3.0,
+			vmaxMs = 4, updraft = 0.02, developSec = 7200, matureSec = 86400, dissolveSec = 21600,
+			rotate = 0.0, downburst = 0.0, line = 0.0, gustFront = 0.0,
+			tornadoHost = false, defaultCat = 2, maxCat = 3, naturalUpTimeSec = 0,
+			precipKind = 2,
+			desc = "浓雾：静稳贴地雾层，能见度极低，无降水"
+		},   // Htop≈450m（雾层 50-500m）、Vmax 4 m/s（静稳）；无降水/无闪电/无阵风
+		// 【11 大气河 AtmosphericRiver】大气河——中纬度"水汽输送带"，宽 300-500km、
+		// 长可达 2000km+（强线状）、生命 1-3 天、低空急流风速 20-30 m/s；带来持续
+		// 暴雨与洪水（层状为主、非强对流）。**line 0.95**（最强线状，复用飑线云带形态）。
+		new TypeSpec
+		{
+			name = "大气河", rmaxFrac = 0.007, htopFrac = 0.10, hbaseM = 800, aspectMin = 0.40,
+			vmaxMs = 28, updraft = 0.25, developSec = 21600, matureSec = 129600, dissolveSec = 43200,
+			rotate = 0.05, downburst = 0.05, line = 0.95, gustFront = 0.50,
+			tornadoHost = false, defaultCat = 3, maxCat = 4, naturalUpTimeSec = 21600,
+			precipKind = 0,
+			desc = "大气河：数千公里水汽输送带，长带暴雨"
+		},   // line 0.95 最强线状；三阶段 6h/36h/12h（现实 1-3 天）
+		// 【12 尘卷风 DustDevil】尘卷风——晴朗干燥白天的热对流涡旋，直径 10-100m、
+		// 高 10-1000m、生命仅数分钟，内部风速 10-20 m/s（可达 25）。**晴空无云**、
+		// 贴地尘柱、强旋。SFS 换算：Rmax≈670m（现实太小看不见，适度放大）；沙漠专属
+		// （非沙漠发育失败，同沙尘暴的沙源逻辑）。
+		new TypeSpec
+		{
+			name = "尘卷风", rmaxFrac = 0.00035, htopFrac = 0.012, hbaseM = 0, aspectMin = 0.35,
+			vmaxMs = 18, updraft = 0.30, developSec = 60, matureSec = 300, dissolveSec = 120,
+			rotate = 0.95, downburst = 0.0, line = 0.0, gustFront = 0.0,
+			tornadoHost = false, defaultCat = 1, maxCat = 2, naturalUpTimeSec = 0,
+			precipKind = 2,
+			desc = "尘卷风：晴空干燥热对流涡旋，贴地尘柱，数分钟"
+		},   // 三阶段 60s/300s/120s（现实生命数分钟）；rotate 0.95 强旋、无降水无闪电
+		// ===================== 理论/极端风暴（2026-09-13 新增 4 类） =====================
+		// 【13 火焰风暴 Firestorm】火积雨云（pyrocumulonimbus）+ 火旋风：大规模火灾自身
+		// 创造并维持的强对流风暴，上升气流极强（火柱可冲对流层顶）、伴烟尘与火旋风，
+		// 多为干性。风速可 >40 m/s。仅手动召唤（需极端火情）。
+		new TypeSpec
+		{
+			name = "火焰风暴", rmaxFrac = 0.0035, htopFrac = 0.16, hbaseM = 500, aspectMin = 0.50,
+			vmaxMs = 40, updraft = 0.90, developSec = 1800, matureSec = 10800, dissolveSec = 3600,
+			rotate = 0.70, downburst = 0.50, line = 0.20, gustFront = 0.60,
+			tornadoHost = false, defaultCat = 2, maxCat = 3, naturalUpTimeSec = 0,
+			precipKind = 2,
+			desc = "焰风暴：火积雨云+火旋风，大火自维持的超强对流"
+		},   // updraft 0.90 最强（火柱）；无降水（干性）；仅手动召唤
+		// 【14 德雷科 Derecho】长生命、快速移动的直线风风暴（bow echo 演化），路径数百公里、
+		// 持续数小时，阵风 30-40 m/s（可 >50），= 大范围下击暴流串；线状 + 最强阵风锋。
+		new TypeSpec
+		{
+			name = "德雷科", rmaxFrac = 0.004, htopFrac = 0.12, hbaseM = 1100, aspectMin = 0.40,
+			vmaxMs = 38, updraft = 0.45, developSec = 10800, matureSec = 86400, dissolveSec = 21600,
+			rotate = 0.15, downburst = 0.60, line = 0.95, gustFront = 1.0,
+			tornadoHost = false, defaultCat = 3, maxCat = 4, naturalUpTimeSec = 25920,
+			precipKind = 0,
+			desc = "德雷科：长生命直线风风暴，路径数百公里"
+		},   // line 0.95 线状、gustFront 1.0 最强出流；三阶段 3h/24h/6h
+		// 【15 极地涡旋 PolarVortex】极地高空冷性大涡旋（绕极涡）南下时带来大范围严寒/暴雪：
+		// 冷心、尺度大（上千 km）、生命数天-数周、风速中等但持续，降水以雪为主。
+		new TypeSpec
+		{
+			name = "极地涡旋", rmaxFrac = 0.012, htopFrac = 0.15, hbaseM = 1000, aspectMin = 0.45,
+			vmaxMs = 30, updraft = 0.25, developSec = 172800, matureSec = 432000, dissolveSec = 86400,
+			rotate = 0.80, downburst = 0.05, line = 0.20, gustFront = 0.70,
+			tornadoHost = false, defaultCat = 3, maxCat = 4, naturalUpTimeSec = 86400,
+			precipKind = 1,
+			desc = "极地涡旋：极地冷性大涡旋南下，大范围严寒"
+		},   // 冷心旋转（rotate 0.80）；固态降水；三阶段 2天/5天/1天
+		// 【16 超级风暴 Megastorm】假想（影视《后天》式）的全球尺度超强气旋：尺度行星级、
+		// 眼内极寒"瞬冻"、生命超长。纯理论/科幻，仅手动召唤（cat6 上限）。
+		new TypeSpec
+		{
+			name = "超级风暴", rmaxFrac = 0.020, htopFrac = 0.18, hbaseM = 500, aspectMin = 0.50,
+			vmaxMs = 70, updraft = 0.60, developSec = 43200, matureSec = 432000, dissolveSec = 86400,
+			rotate = 1.0, downburst = 0.40, line = 0.30, gustFront = 0.90,
+			tornadoHost = false, defaultCat = 4, maxCat = 6, naturalUpTimeSec = 43200,
+			precipKind = 0,
+			desc = "超级风暴：假想全球尺度超强气旋（《后天》式）"
+		}    // cat6 上限、Rmax 最大（行星级）；仅手动召唤
 	};
 
 	public static string TypeName(StormType t)
 	{
 		return Spec[(int)t].name;
+	}
+
+	// ===== 相态/类别判定辅助（渲染与逻辑共用，2026-09-12 扩展）=====
+	// 原实现把"无降水/沙色/无闪电"散落成 `type == StormType.DustStorm` 硬编码；
+	// 扩展类型后集中到此处，新增类型只改一处。
+	public static bool IsPrecipFree(StormType t)    // 无降水（干燥/静稳系统：沙尘暴/浓雾/尘卷风）
+	{
+		return Spec[(int)t].precipKind == 2;
+	}
+
+	public static bool IsFrozenPrecip(StormType t)  // 固态降水（雪/冰粒：冬季风暴/冰暴）
+	{
+		return Spec[(int)t].precipKind == 1;
+	}
+
+	public static bool IsDusty(StormType t)         // 含尘沙色系统（沙尘暴/尘卷风，云色走沙黄）
+	{
+		return t == StormType.DustStorm || t == StormType.DustDevil;
+	}
+
+	public static bool IsFog(StormType t)           // 贴地低能见度雾（浓雾）
+	{
+		return t == StormType.DenseFog;
+	}
+
+	public static bool NoLightning(StormType t)     // 无云地闪（干燥/静稳系统）
+	{
+		return IsPrecipFree(t);
 	}
 
 	// 龙卷类型名（FxInst.variant 0-7，与 StormRenderer 的渲染分支一一对应）：
@@ -227,6 +398,48 @@ public class WeatherSystem
 			}
 			return "特强沙尘暴";
 		}
+		// ===== 扩展类型分级（2026-09-12）：各按现实分级标准，不再一律套通用档 =====
+		if (t == StormType.ExtratropicalCyclone)
+		{
+			return extrNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.WinterStorm)
+		{
+			return winterNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.IceStorm)
+		{
+			return iceNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.DenseFog)
+		{
+			return fogNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.AtmosphericRiver)
+		{
+			return arNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.DustDevil)
+		{
+			return devilNames[Category.Clamp(cat)];
+		}
+		// 理论/极端风暴（2026-09-13）
+		if (t == StormType.Firestorm)
+		{
+			return fireNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.Derecho)
+		{
+			return derechoNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.PolarVortex)
+		{
+			return polarNames[Category.Clamp(cat)];
+		}
+		if (t == StormType.Megastorm)
+		{
+			return megaNames[Category.Clamp(cat)];
+		}
 		return genericGradeNames[Category.Clamp(cat)];
 	}
 
@@ -234,6 +447,23 @@ public class WeatherSystem
 	// 每次调用都新建一个 7 元素数组 —— HUD 每帧为每行系统 + 雷达 + 菜单各调一次，
 	// 是纯热路径分配）。
 	private static readonly string[] genericGradeNames = { "微弱", "弱", "中等", "较强", "强", "很强", "极端" };
+
+	// 扩展类型的逐型分级名表（静态字段，避免热路径每次 new；沿用 genericGradeNames 的教训）。
+	// 依据：温带气旋按强度描述（低压→风暴→爆发性气旋）、冬季风暴按降雪国标
+	// （小/中/大/暴雪）、冰暴按积冰灾害、浓雾按 GB/T 雾分级、大气河按 AR Scale 1-5
+	// （Ralph et al. 2019）、尘卷风按强度。
+	private static readonly string[] extrNames = { "温带低压", "温带扰动", "温带风暴", "强温带气旋", "爆发性气旋", "超强温带气旋", "极端温带气旋" };
+	private static readonly string[] winterNames = { "小雪", "中雪", "大雪", "暴雪", "大暴雪", "特大暴雪", "特大暴雪" };
+	private static readonly string[] iceNames = { "冻雨", "冻雨", "冰暴", "强冰暴", "严重冰暴", "灾难性冰暴", "灾难性冰暴" };
+	private static readonly string[] fogNames = { "轻雾", "雾", "大雾", "浓雾", "强浓雾", "特强浓雾", "特强浓雾" };
+	private static readonly string[] arNames = { "弱大气河", "AR-1 弱", "AR-2 中等", "AR-3 强", "AR-4 极强", "AR-5 极端", "AR-5 极端" };
+	private static readonly string[] devilNames = { "尘旋", "尘卷风", "强尘卷风", "强尘卷风", "强尘卷风", "强尘卷风", "强尘卷风" };
+	// 理论/极端风暴分级名（2026-09-13）：火焰风暴按火强度、德雷科按直线风灾害、
+	// 极地涡旋按严寒程度、超级风暴按假想强度。
+	private static readonly string[] fireNames = { "小焰风暴", "焰风暴", "强焰风暴", "超级焰风暴", "超级焰风暴", "超级焰风暴", "超级焰风暴" };
+	private static readonly string[] derechoNames = { "阵风线", "直线风", "德雷科", "强德雷科", "特强德雷科", "特强德雷科", "特强德雷科" };
+	private static readonly string[] polarNames = { "弱极涡", "极地涡旋", "强极地涡旋", "严寒风暴", "超级严寒风暴", "超级严寒风暴", "超级严寒风暴" };
+	private static readonly string[] megaNames = { "超级低压", "超级风暴", "强超级风暴", "超强超级风暴", "超级风暴·极", "超级风暴·极", "超级风暴·极" };
 
 	// 台风眼壁半径（Rmax 比例，渲染+风场共用）：按强度分级贴近现实——
 	// cat0/1(TD/TS) 无清晰眼（0）、cat2(STS) 朦胧眼 0.22、cat3(C1) 0.30、cat4(C2) 0.36、
@@ -278,6 +508,18 @@ public class WeatherSystem
 			case StormType.Supercell:  baseM = 800.0;  break;   // 暴雨+冰雹 <1km
 			case StormType.SquallLine: baseM = 1000.0; break;   // 飑线暴雨 ~1km
 			case StormType.MCS:        baseM = 1500.0; break;   // 层状+对流混合 ~1.5-3km
+			// 扩展类型能见度基准（2026-09-12）：各按自身现实观测区间
+			case StormType.ExtratropicalCyclone: baseM = 1100.0; break;   // 锋面层状降水 ~1-2km
+			case StormType.WinterStorm: baseM = 400.0;  break;   // 暴雪能见度 <400m（NWS 暴风雪判据）
+			case StormType.IceStorm:    baseM = 600.0;  break;   // 冻雨低云 ~0.5-1km
+			case StormType.DenseFog:    baseM = 120.0;  break;   // 浓雾 <200m（GB/T：强浓雾 <50m）
+			case StormType.AtmosphericRiver: baseM = 1000.0; break;   // 暖区层状暴雨 ~1km
+			case StormType.DustDevil:   baseM = 500.0;  break;   // 贴地尘柱局部 <1km
+			// 理论/极端风暴（2026-09-13）
+			case StormType.Firestorm:   baseM = 300.0;  break;   // 烟尘遮蔽 <300m
+			case StormType.Derecho:     baseM = 700.0;  break;   // 直线风暴雨 ~0.7km
+			case StormType.PolarVortex: baseM = 500.0;  break;   // 雪盲 ~0.5km
+			case StormType.Megastorm:   baseM = 250.0;  break;   // 假想全球系统，能见度极差
 			case StormType.DustStorm:  return -1.0;             // 走 DustFactor
 			default:                   baseM = 1000.0; break;
 		}
@@ -320,6 +562,11 @@ public class WeatherSystem
 	public double commaDir = 1.0;
 	public double commaK;
 	public double muddyFactor;
+	// 超级飓风（Hypercane，理论风暴，Emanuel 1988）：理论风速 ~800 km/h（≈222 m/s，约 2.85×CAT-5），
+	// 需 SST ~48°C（火山/陨石撞击触发）。游戏可及阈值：海温 ≥30°C 且已达最高档（cat6）。
+	// 峰值风速 ×2.85、HUD 显示"超级飓风 Hypercane"。
+	public bool hypercane;
+	private bool hyperManual;   // 指挥中心手动强制（否则仅 SST≥48°C + 满档自动触发）
 	private double lastMuddyCheck = -999.0;   // 泥雨节流（age 基准）
 	// EWRC 眼壁置换（演化讨论高价值 feature）：成熟强台风周期性"先降 20% 风速/
 	// 能量、眼变糊眼径外扩 → 复强略超置换前"（真实台风眼壁置换周期 EWRC）。渲染端
@@ -391,6 +638,7 @@ public class WeatherSystem
 		public bool dissolving;
 		public bool manual;        // 手动添加常驻（不自然衰减）
 		public double seed;        // 渲染/波动随机种子
+		public double vOff;        // 相对母体的切向漂移速度（Rmax/游戏秒）：龙卷不再钉死位置
 		public int variant;        // 龙卷类型（0=标准 1=楔形 2=绳状 3=水龙卷 4=陆龙卷，自动派生见 Advance）
 		// 类型扩展：5=多涡旋（主漏斗内 2 子涡快速绕转）、6=卫星龙卷（外侧 1 小
 		// 漏斗慢绕）、7=gustnado（阵风锋小尘旋，无冷凝漏斗）。子涡旋转相位（现实时间累计，
@@ -833,7 +1081,9 @@ public class WeatherSystem
 		ulong n = (ulong)(tornadoes.Count + downbursts.Count + 1) + (ulong)attempt * 7919u;
 		double h1 = (double)(((ulong)seed * 2654435761u + n * 97u) % 10000) / 10000.0;
 		double h2 = (double)(((ulong)seed * 2246822519u + n * 131u) % 10000) / 10000.0;
-		fx.sOff = (h1 * 2.0 - 1.0) * (0.2 + sMax * h2);   // 双侧随机，0.2Rmax 起（避开正中心）
+		double mag = 0.2 + (sMax - 0.2) * h2;              // 偏移量 0.2~sMax（Rmax 单位）
+		fx.sOff = ((h1 < 0.5) ? (0.0 - mag) : mag);        // 双侧随机，|sOff| ≥ 0.2Rmax（真正避开正中心）
+		fx.vOff = (h2 - 0.5) * 0.02;                       // 相对母体切向漂移 ±0.01 Rmax/游戏秒（≈±4 m/s）
 		fx.seed = (double)(((ulong)seed * 40503u + n * 911u) % 10000) / 100.0;
 	}
 
@@ -937,7 +1187,10 @@ public class WeatherSystem
 	// 与超级单体/飑线/弓形回波/MCS 相关）：仅 Supercell/SquallLine/MCS 可产下击暴流。
 	public bool CanDownburst()
 	{
-		return type == StormType.Supercell || type == StormType.SquallLine || type == StormType.MCS;
+		// 扩展（2026-09-12）：温带气旋的冷锋有强对流段、大气河的暖区抬升也能触发，
+		// 均可产下击暴流；冬季风暴/冰暴/浓雾/尘卷风不产（静稳/浅薄/无冷池）。
+		return type == StormType.Supercell || type == StormType.SquallLine || type == StormType.MCS
+			|| type == StormType.ExtratropicalCyclone || type == StormType.AtmosphericRiver;
 	}
 
 	// 返回 bool（宿主不允许时拒绝并返回 false，F6 菜单可提示）。
@@ -964,8 +1217,9 @@ public class WeatherSystem
 	// 产生下暴的系统（超级单体 RFD / 飑线弓形前沿 / MCS 出流边界）——白名单与下暴一致。
 	public bool CanGustFront()
 	{
-		// 沙尘暴也允许挂阵风锋（Haboob 沙墙前沿 = 阵风锋的沙漠形态）
-		return CanDownburst() || type == StormType.DustStorm;
+		// 沙尘暴也允许挂阵风锋（Haboob 沙墙前沿 = 阵风锋的沙漠形态）；
+		// 扩展（2026-09-12）：冬季风暴的暴风雪阵风锋、温带气旋的冷锋锋面同样挂阵风锋。
+		return CanDownburst() || type == StormType.DustStorm || type == StormType.WinterStorm;
 	}
 
 	public bool AddGustFront()
@@ -1255,12 +1509,31 @@ public class WeatherSystem
 		// 现在等级名（StrengthName 用 PeakWind）与峰值风（vmaxTargetBase）同源。
 		// 非台风（无萨菲尔概念）保持 0.5+cat/6（相对系统基准）。
 		double catF = (type == StormType.Typhoon) ? (Category.PeakWind[category] / 62.0) : (0.5 + category / 6.0);
+		if (hypercane && type == StormType.Typhoon)
+		{
+			// 超级飓风：理论风速 ~800 km/h（≈222 m/s），约为 CAT-5（78 m/s）的 2.85 倍
+			// （Emanuel 1988 假说；理论需 SST ~48°C，此处用游戏可及阈值触发）。
+			catF *= 2.85;
+		}
 		// 审查🔴-2：补乘大气分级 cV（原漏乘 → 巨行星/金星系统升级后风速掉回地球基准）
 		double cVnow = (atmoClass == 2) ? 1.6 : ((atmoClass == 1) ? 1.3 : 1.0);
 		vmaxTargetBase = Spec[(int)type].vmaxMs * catF * cVnow;
 		vmaxTarget = vmaxTargetBase;
 		SyncFxStrength();
 		cWindDirty = true;   // category 变化 → 风圈缓存失效
+	}
+
+	// 指挥中心手动触发超级飓风（Hypercane）：满档台风再强化一次即进入该状态
+	// （理论需 SST≈48°C；这里走 hyperManual 绕过海温门槛，状态持续到消散）。
+	public void MakeHypercane()
+	{
+		if (type != StormType.Typhoon)
+		{
+			return;
+		}
+		hyperManual = true;
+		hypercane = true;
+		SetCategory(6);
 	}
 
 	// 待办5 🟡-8：眼壁实际风速（风场 windZoneGain 眼壁区 1.2 增强的物理峰值），
@@ -1276,7 +1549,12 @@ public class WeatherSystem
 		double s = 0.5 + category / 6.0;
 		foreach (FxInst fx in tornadoes)
 		{
-			fx.strength = s;
+			// 只同步手动召唤（菜单常驻）的龙卷强度；自然生成的龙卷保持自身衰减，
+			// 不被切档/自然升级"续命回满血"（原实现把所有现存龙卷覆写回 0.5+cat/6）。
+			if (fx.manual)
+			{
+				fx.strength = s;
+			}
 		}
 		foreach (FxInst fx in downbursts)
 		{
@@ -1507,10 +1785,10 @@ public class WeatherSystem
 		// （无暖湿不稳定）能量输入应最低；沙漠夏季有干雷暴，输入高于冰原（原 Ice>Desert
 		// 与物理直觉相反）。
 		else if (terrainKind == TerrainKind.Ice) terrainE = 0.18;
-		else if (terrainKind == TerrainKind.Desert) terrainE = (type == StormType.DustStorm) ? 0.9 : 0.28;   // 沙尘暴靠风驱动，沙漠里反而持久
+		else if (terrainKind == TerrainKind.Desert) terrainE = (type == StormType.DustStorm || type == StormType.DustDevil) ? 0.9 : 0.28;   // 沙尘暴/尘卷风靠风驱动，沙漠里反而持久
 		// 审查二轮：沙尘暴离开沙漠 → 0.35（无沙源衰竭，~42min 耗尽；不触发硬
 		// 失败 → F6 海上召唤不消失，保留玩家自由）。顺带修掉 🟢-15"出海反而活更久"。
-		else if (type == StormType.DustStorm) terrainE = 0.35;
+		else if (type == StormType.DustStorm || type == StormType.DustDevil) terrainE = 0.35;
 		// 台风海上按海温调制（用户：冷水会冷死台风——气象铁律，SST 掉 1-2°C
 		// 强度骤降）：海上 terrainE=1.0 基础上 × 海温因子 sstF——暖水（≥28°C）1.15 增强、
 		// 临界 26.5°C ≈1.0、24°C 0.65、22°C 0.4、≤20°C 0.15（冷水：能量输入骤降 →
@@ -1535,6 +1813,14 @@ public class WeatherSystem
 				sstF = Math.Max(0.15, sstF * 0.55);
 			}
 			terrainE = Math.Max(0.15, terrainE * sstF);
+			// 超级飓风（Hypercane，理论风暴）：极暖海温（≥30°C，理论需 48°C）且已达最高档 →
+			// 进入该状态（峰值风速 ×2.85 ≈ 800 km/h、HUD 显示"超级飓风"）。翻转时重算峰值风。
+			bool wasHyper = hypercane;
+			hypercane = hyperManual || (sst >= 48f && category >= 6);   // 理论阈值 SST≈48°C；指挥中心可手动强制
+			if (hypercane != wasHyper)
+			{
+				SetCategory(category);
+			}
 			DigColdWater();   // 冷尾流：台风挖冷水（本帧 sstF 用挖冷前值，下帧见挖后值，平滑）
 		}
 		// 类型成熟期净耗散（能量/游戏秒，海上参考；÷terrainE → 陆地更快枯竭）。
@@ -1582,8 +1868,10 @@ public class WeatherSystem
 			{
 				hardFail = terrainKind != TerrainKind.Ocean || sstDisplay < 24.0;
 			}
-			else if (type == StormType.DustStorm)
+			else if (type == StormType.DustStorm || type == StormType.DustDevil)
 			{
+				// 沙尘暴/尘卷风都需要沙源（干旱区）：离开沙漠 → 发育失败
+				// （F6 召唤为成熟态不触发；仅自然生成的发育期判死）
 				hardFail = terrainKind != TerrainKind.Desert;
 			}
 			if (hardFail)
@@ -1690,7 +1978,16 @@ public class WeatherSystem
 			// ÷(1+commaK×0.8) 放慢 ~1.8 倍（12h→~18h，"残余低压持续降雨"语义）；gate
 			// atmoClass==0（巨行星大红斑是反气旋、金星干燥，不触发残余化）。设置开关
 			// residualLow 控制。
-			commaK = (type == StormType.Typhoon && atmoClass == 0) ? Clamp01((30.0 - energy) / 20.0) : 0.0;
+			// 台风：消散期残余低压逗点化（energy 30→10）。温带气旋：标志性逗点云盾——
+			// 全程随强度存在（成熟期最强），不再只有台风才有逗点。
+			if (type == StormType.ExtratropicalCyclone)
+			{
+				commaK = Clamp01(0.35 + 0.55 * (category / 4.0)) * Clamp01(energy / 30.0);
+			}
+			else
+			{
+				commaK = (type == StormType.Typhoon && atmoClass == 0) ? Clamp01((30.0 - energy) / 20.0) : 0.0;
+			}
 			double dr = dissolveRate / Math.Max(terrainE, 0.2);
 			if (TyphoonConfig.I.residualLow)
 			{
@@ -1831,7 +2128,9 @@ public class WeatherSystem
 			// 更强相关类型转变（单体→多单体→超级单体→MCS、飑线→MCS），台风不转；
 			// 3 秒粒子过渡动画（渲染端云淡出淡入），完成后按新类型重配尺度。
 			// 沙尘暴不参与类型转变（干燥系统，不会变成雷暴）
-			if (transitionAnimT < 0.0 && type != StormType.Typhoon && type != StormType.DustStorm && Roll(2.0, dt, 2246822519u))
+			// 扩展（2026-09-12）：只有对流族参与类型转变链（枚举值 ≤ MCS，且排除 Typhoon）；
+			// 沙尘暴/尘卷风（干燥系统）与温带气旋/冬季风暴/冰暴/浓雾/大气河（非对流族）均不参与。
+			if (transitionAnimT < 0.0 && type != StormType.Typhoon && type <= StormType.MCS && Roll(2.0, dt, 2246822519u))
 			{
 				// 默认 = 不变，并用 nt > type 硬保证"只能变强"。原实现默认值写成了
 				// StormType.Cell，而 MCS 没有任何分支命中 → 中尺度会"退化"成单体
@@ -1865,6 +2164,9 @@ public class WeatherSystem
 				for (int ti = tornadoes.Count - 1; ti >= 0; ti--)
 				{
 					FxInst fx = tornadoes[ti];
+					// 独立平流：龙卷相对母体缓慢切向漂移（原实现 sOff 一次随机后永不改变、
+					// 钉死在母体切向偏移上），限幅 ±1.1Rmax 内。
+					fx.sOff = Math.Max(-1.1, Math.Min(1.1, fx.sOff + fx.vOff * effDt));
 					if (fx.dissolving || !fx.manual)
 					{
 						fx.strength -= dt / (fx.dissolving ? 2.5 : 150.0);
@@ -1884,7 +2186,8 @@ public class WeatherSystem
 				bool canSpawnTornado = (tornadoQuota < 0)
 					? (tornadoes.Count < 4)
 					: (tornadoQuota > 0 && tornadoes.Count < 2);
-				double tornadoRate = (tornadoQuota < 0) ? 60.0 : 6.0;
+				// 刷新频率随母体强度：弱超单产龙卷更稀、强超单更密（现实 EF 强度与母体强度相关）。
+				double tornadoRate = (tornadoQuota < 0) ? 60.0 : (3.0 + category);
 				if (canSpawnTornado && Roll(tornadoRate, dt, 2654435761u))
 				{
 					if (tornadoQuota > 0)

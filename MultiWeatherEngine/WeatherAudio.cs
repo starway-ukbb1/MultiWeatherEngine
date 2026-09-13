@@ -21,11 +21,11 @@ public class WeatherAudio : MonoBehaviour
 
 	private bool loggedActive;   // 首次有声打日志
 
-	// ===== 龙卷预警曲（两首）=====
-	// A 常规尺度（storm_chase.wav，提前 15 现实秒）/ B 大尺度备选（storm_chase_big.wav，
-	// 提前 19 秒）。判据 = 核半径 ≥ tornadoThemeBigCoreM（默认 280m：楔形 304-334m 命中，
-	// 标准/绳状 138-152m 走 A）。从 mod 目录读 16bit PCM WAV（自研解析 + AudioClip.Create，
-	// 不依赖 Unity 解码器）；读盘走后台线程，clip 按需才建（没遇到大龙卷不占那 30MB）。
+	// ===== 龙卷预警曲（单曲 · 循环）=====
+	// 只留 storm_chase.wav（社区公用「风暴拦截者」风格曲目）：龙卷抵达前 15 现实秒起播，
+	// 循环播放直到龙卷离开维持半径后淡出——单曲时长不足以覆盖整场遭遇，靠 loop 撑住。
+	// 从 mod 目录读 16bit PCM WAV（自研解析 + AudioClip.Create，不依赖 Unity 解码器）；
+	// 读盘走后台线程，clip 按需才建。
 	private class ThemeTrack
 	{
 		public string file;
@@ -38,7 +38,6 @@ public class WeatherAudio : MonoBehaviour
 	}
 
 	private readonly ThemeTrack themeA = new ThemeTrack();
-	private readonly ThemeTrack themeB = new ThemeTrack();
 	private AudioSource themeSrc;
 	private bool themeArmed = true;   // 重新武装：离开/消散后可再次触发（从头播）
 	private bool themePlaying;        // 本轮遭遇是否处于"该放"状态（含已越过玩家、正在远离）
@@ -65,7 +64,6 @@ public class WeatherAudio : MonoBehaviour
 		windSrc.volume = 0f;
 		windSrc.Play();
 		BeginLoad(themeA, TyphoonConfig.I.tornadoThemeFile);
-		BeginLoad(themeB, TyphoonConfig.I.tornadoThemeBigFile);
 		Debug.Log("[TyphoonAudio] synthesized wind " + windSrc.clip.length + "s @" + windSrc.clip.frequency + "Hz, thunder " + thunSrc.clip.length + "s");
 	}
 
@@ -149,7 +147,7 @@ public class WeatherAudio : MonoBehaviour
 			if (themeSrc == null)
 			{
 				themeSrc = gameObject.AddComponent<AudioSource>();
-				themeSrc.loop = false;
+				themeSrc.loop = true;   // 单曲循环：曲子比遭遇短时靠它撑满整场
 				themeSrc.spatialBlend = 0f;
 				themeSrc.volume = 0f;
 			}
@@ -216,15 +214,10 @@ public class WeatherAudio : MonoBehaviour
 		return true;
 	}
 
-	// 预警曲状态机：ETA ≤ 提前量 → 起播（每次遭遇只触发一次）；离开/消散 → 淡出并重新武装。
+	// 预警曲状态机：ETA ≤ 提前量 → 起播（每次遭遇只触发一次，循环播放）；离开/消散 → 淡出并重新武装。
 	private void UpdateTheme(float masterVol)
 	{
-		// 轨道选型：核半径 ≥ 阈值 = 大尺度龙卷（楔形宽漏斗 304-334m）→ 备选曲 B + 19 秒
-		// 提前量；常规尺度（标准/绳状/陆龙卷 138-152m）→ 曲 A + 15 秒。判据用核半径
-		// （= 看得见的漏斗宽度），不用 EF 强度 —— 用户要的是"尺度大时换曲"。
-		float bigCore = Mathf.Max(50f, TyphoonConfig.I.tornadoThemeBigCoreM);
-		bool bigWant = warnCoreM >= bigCore;
-		float lead = Mathf.Max(2f, bigWant ? TyphoonConfig.I.tornadoThemeBigLeadSec : TyphoonConfig.I.tornadoThemeLeadSec);
+		float lead = Mathf.Max(2f, TyphoonConfig.I.tornadoThemeLeadSec);
 		// 维持半径至少 3×核半径：超巨型（核可达 ~1km）的风暴不能被"1500m 维持圈"提前放开。
 		float keepDist = Mathf.Max(Mathf.Max(500f, TyphoonConfig.I.tornadoThemeKeepM), warnCoreM * 3f);
 		// 时间加速保护：warnEta 已是现实秒，但时间加速下整段遭遇会被压缩到几秒内，
@@ -233,32 +226,19 @@ public class WeatherAudio : MonoBehaviour
 		bool incoming = warpOk && warnEta >= 0f && warnEta <= lead;   // 逼近中：漏斗边缘 ≤ lead 秒
 		if (TyphoonConfig.I.tornadoTheme && incoming && themeArmed)
 		{
-			// 只在真正要播时才建 clip（没遇到大龙卷就不占那份 ~30MB 内存）；
-			// 目标曲目缺失（文件没放）就退回另一首，避免"该响的时候静音"。
-			MakeClip(bigWant ? themeB : themeA);
-			MakeClip(bigWant ? themeA : themeB);
-			AudioClip want = (bigWant ? themeB : themeA).clip;
-			if (want == null)
+			// 只在真正要播时才建 clip；曲目缺失（文件没放）就静音（不影响其他功能）。
+			MakeClip(themeA);
+			if (themeA.clip != null)
 			{
-				want = (bigWant ? themeA : themeB).clip;
-				bigWant = !bigWant;
-			}
-			if (want != null)
-			{
-				// 曲长 vs 遭遇时长：遭遇 ≈ 抵达剩余 + 过境后离开维持半径（都是现实秒）。
-				// 曲子比遭遇长 → 按比例提速，让它跟遭遇一起收尾；上限 maxPitch 防变调过头
-				// （时间加速下遭遇会被压到几秒，这里就只能靠上限兜住）。
-				float encSec = warnEta + keepDist / Mathf.Max(TyphoonManager.nearestTornadoSpeedReal, 0.5f);
-				float maxPitch = Mathf.Max(1f, TyphoonConfig.I.tornadoThemeMaxPitch);
-				float pitch = Mathf.Clamp(want.length / Mathf.Max(encSec, 1f), 1f, maxPitch);
 				themeArmed = false;
 				themePlaying = true;
 				themeStarted = Time.unscaledTime;
-				themeSrc.clip = want;
-				themeSrc.pitch = pitch;
+				themeSrc.clip = themeA.clip;
+				themeSrc.pitch = 1f;      // 循环播放，不再按遭遇时长提速
 				themeSrc.time = 0f;
+				themeSrc.loop = true;
 				themeSrc.Play();
-				Debug.Log("[TyphoonAudio] tornado theme start (" + (bigWant ? "大尺度" : "常规") + "), ETA " + warnEta.ToString("0.0") + "s, dist " + warnDist.ToString("0") + "m, core " + warnCoreM.ToString("0") + "m, enc " + encSec.ToString("0") + "s, pitch " + pitch.ToString("0.00"));
+				Debug.Log("[TyphoonAudio] tornado theme start, ETA " + warnEta.ToString("0.0") + "s, dist " + warnDist.ToString("0") + "m, core " + warnCoreM.ToString("0") + "m, loop");
 			}
 		}
 		if (themeSrc == null || themeSrc.clip == null)

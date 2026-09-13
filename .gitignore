@@ -2,3 +2,7 @@ bin/
 obj/
 lib/
 *.bak*
+# Unity AssetBundle 构建副产物（仅构建期需要，不入库）
+*.manifest
+MultiWeatherEngine/MultiWeatherEngine
+MultiWeatherEngine/MultiWeatherEngine.manifest

@@ -104,29 +104,24 @@ public class TyphoonConfig
 	public int preSpawnCountPerPlanet = 2;     // 当前行星预生成数量（0 = 关）
 	public float preSpawnTyphoonChance = 0.15f; // 台风占比（低，台风是大事件）
 
-	// 龙卷预警音乐（风暴拦截者曲目）：龙卷抵达前 tornadoThemeLeadSec 现实秒开始播放，
+	// 龙卷预警音乐（社区公用「风暴拦截者」风格曲目，单曲循环）：龙卷抵达前
+	// tornadoThemeLeadSec 现实秒开始播放，循环到龙卷离开维持半径后淡出；
 	// 音频文件放在 mod 目录（16bit PCM WAV，默认 storm_chase.wav）。
 	public bool tornadoTheme = true;             // 开关
 	public float tornadoThemeLeadSec = 15f;      // 提前量（现实秒）
 	public float tornadoThemeVolume = 0.9f;      // 相对音量（再乘 weatherVolume 主音量）
 	public string tornadoThemeFile = "storm_chase.wav";
-	// 大尺度龙卷备选曲：龙卷核半径 ≥ tornadoThemeBigCoreM（默认 280m —— 楔形宽漏斗
-	// 304-334m 命中；标准/绳状/陆龙卷 138-152m 走上面那首）时换成这首，提前量也改用
-	// tornadoThemeBigLeadSec。
-	public string tornadoThemeBigFile = "storm_chase_big.wav";
-	public float tornadoThemeBigLeadSec = 19f;
-	public float tornadoThemeBigCoreM = 280f;
 	// 时间加速保护：倍率高于该值不放预警曲（快进时一个接一个触发会很吵，而且那时
 	// 玩家并没在看龙卷）；提前量本身已按现实秒换算，不受加速影响。
 	public float tornadoThemeMaxWarp = 10f;
-	// 曲长 > 遭遇时长时的提速上限（pitch，1.35 ≈ 快 35%，再高就明显变调了）。
-	public float tornadoThemeMaxPitch = 1.35f;
-	// 起播后的维持条件（原实现只看"逼近中"的 ETA，龙卷一越过玩家角度 ETA 变 -1 →
-	// 音乐在最刺激的抵达瞬间被掐掉）：龙卷还在 keepM 米内 或 起播不足 minHoldSec
-	// 就继续放；两者都不满足才淡出。fadeSec = 淡入淡出时长。
+	// 起播后的维持条件：龙卷还在 keepM 米内 或 起播不足 minHoldSec 就继续放（循环），
+	// 两者都不满足才淡出并重新武装。fadeSec = 淡入淡出时长。
 	public float tornadoThemeKeepM = 1500f;      // 维持半径（米）
 	public float tornadoThemeMinHoldSec = 20f;   // 最短播放时长（秒，防遭遇中途被切）
 	public float tornadoThemeFadeSec = 2.5f;     // 淡入/淡出时长（秒）
+	// 预警曲只在玩家低于该高度（米 AGL）时触发/维持：高空的火箭听不到地面龙卷警笛
+	// （原实现不看高度 → 经度对上时 50km 轨道上也会响）。设很大 = 关闭该限制。
+	public float tornadoThemeMaxAltM = 12000f;
 
 	// mod 目录（Load 时记下）：音频等资源文件按它定位（TyphoonConfig.Folder + 文件名）。
 	public static string Folder;

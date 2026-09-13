@@ -97,7 +97,7 @@ public class TyphoonHud : MonoBehaviour
 		// 三条主指标：强度 / 能量 / 距离
 		float dist = DistTo(st);
 		DrawMetric(px, ref py, iw, s, "强度", UiTheme.IntensityOf(st.category), st.category / 6f,
-			"CAT-" + st.category + " / 上限 " + WeatherSystem.Spec[(int)st.type].maxCat);
+			WeatherSystem.StrengthName(st.type, st.category) + " / 上限 " + WeatherSystem.Spec[(int)st.type].maxCat);
 		DrawMetric(px, ref py, iw, s, "能量", UiTheme.Fuel, (float)(st.energy / 100.0), (st.energy).ToString("0") + "%");
 		if (dist >= 0f)
 		{
@@ -634,6 +634,10 @@ public class TyphoonHud : MonoBehaviour
 
 	private static string GradeName(WeatherSystem s)
 	{
+		if (s.type == StormType.Typhoon && s.hypercane)
+		{
+			return "超级飓风 Hypercane";
+		}
 		if (s.type == StormType.Typhoon && s.commaK > 0.3 && s.atmoClass == 0)
 		{
 			return "残余低压";
