@@ -562,9 +562,11 @@ public class WeatherSystem
 	public double commaDir = 1.0;
 	public double commaK;
 	public double muddyFactor;
-	// 超级飓风（Hypercane，理论风暴，Emanuel 1988）：理论风速 ~800 km/h（≈222 m/s，约 2.85×CAT-5），
+	// 超级飓风（Hypercane，理论风暴，Emanuel 1988）：峰值风速**锚定 970 km/h**
+	//（≈269.4 m/s，约 3.45×CAT-5 的 78 m/s；用户指定数值，见 HYPERCANE_PEAK_MPS）。
 	// 需 SST ~48°C（火山/陨石撞击触发）。游戏可及阈值：海温 ≥30°C 且已达最高档（cat6）。
-	// 峰值风速 ×2.85、HUD 显示"超级飓风 Hypercane"。
+	// HUD 显示"超级飓风 Hypercane"。
+	public static readonly double HYPERCANE_PEAK_MPS = 970.0 / 3.6;   // 970 km/h → 269.44 m/s
 	public bool hypercane;
 	private bool hyperManual;   // 指挥中心手动强制（否则仅 SST≥48°C + 满档自动触发）
 	private double lastMuddyCheck = -999.0;   // 泥雨节流（age 基准）
@@ -1511,9 +1513,14 @@ public class WeatherSystem
 		double catF = (type == StormType.Typhoon) ? (Category.PeakWind[category] / 62.0) : (0.5 + category / 6.0);
 		if (hypercane && type == StormType.Typhoon)
 		{
-			// 超级飓风：理论风速 ~800 km/h（≈222 m/s），约为 CAT-5（78 m/s）的 2.85 倍
-			// （Emanuel 1988 假说；理论需 SST ~48°C，此处用游戏可及阈值触发）。
-			catF *= 2.85;
+			// 超级飓风 Hypercane：**峰值直接锚定 970 km/h**（用户指定数值），
+			// 不再用"×2.85 倍"这种间接写法 —— 倍率一旦被别处调过就会悄悄漂掉
+			// （历史实现写 ×2.85，实际只到 ≈800 km/h，与规格不符）。
+			// 反推 catF：vmaxTargetBase = Spec[Typhoon].vmaxMs × catF × cV，
+			// 令 catF = HYPERCANE_PEAK_MPS / Spec[Typhoon].vmaxMs 即得目标峰值
+			//（大气分级 cV 仍在外层相乘 ⇒ 厚大气行星上同比放大，符合原设计）。
+			double vmaxBase = Spec[(int)StormType.Typhoon].vmaxMs;
+			if (vmaxBase > 1.0) catF = HYPERCANE_PEAK_MPS / vmaxBase;
 		}
 		// 审查🔴-2：补乘大气分级 cV（原漏乘 → 巨行星/金星系统升级后风速掉回地球基准）
 		double cVnow = (atmoClass == 2) ? 1.6 : ((atmoClass == 1) ? 1.3 : 1.0);
@@ -1814,7 +1821,7 @@ public class WeatherSystem
 			}
 			terrainE = Math.Max(0.15, terrainE * sstF);
 			// 超级飓风（Hypercane，理论风暴）：极暖海温（≥30°C，理论需 48°C）且已达最高档 →
-			// 进入该状态（峰值风速 ×2.85 ≈ 800 km/h、HUD 显示"超级飓风"）。翻转时重算峰值风。
+			// 进入该状态（峰值锚定 970 km/h、HUD 显示"超级飓风"）。翻转时重算峰值风。
 			bool wasHyper = hypercane;
 			hypercane = hyperManual || (sst >= 48f && category >= 6);   // 理论阈值 SST≈48°C；指挥中心可手动强制
 			if (hypercane != wasHyper)

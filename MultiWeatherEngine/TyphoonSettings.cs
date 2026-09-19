@@ -175,7 +175,7 @@ public static class TyphoonSettings
 		// 快捷键说明（只读，玩家易忽略）
 		Section(box, w, "快捷键");
 		Builder.CreateLabel(box, w, 22, 0, 0, "F6 气象菜单  F7 解散选中  F8 强度+1");
-		Builder.CreateLabel(box, w, 22, 0, 0, "F9 系统面板  Shift+F7 隐藏 HUD");
+		Builder.CreateLabel(box, w, 22, 0, 0, "F10 系统面板  Shift+F7 隐藏 HUD");
 	}
 
 	private static void ParticleTab(Box box, int w)

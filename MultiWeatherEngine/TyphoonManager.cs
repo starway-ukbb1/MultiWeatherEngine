@@ -30,7 +30,7 @@ public class TyphoonManager : MonoBehaviour
 
 	public bool menuOpen;
 
-	// 底部"活跃天气系统"面板展开状态（F9 切换，标题栏点击也可切换）。
+	// 底部"活跃天气系统"面板展开状态（F10 切换，标题栏点击也可切换）。
 	public static bool panelExpanded = true;
 
 	// F6 气象菜单可拖动（拖标题栏）。
@@ -461,8 +461,34 @@ public class TyphoonManager : MonoBehaviour
 	// LateUpdate（在 SFS 的 UpdatePostProcessing 之后）叠加海浪增强 + 近距风暴变灰。
 	private void LateUpdate()
 	{
+		// 与 OceanWaves 的双向联动：先握手（内部 2 秒节流，连上后只判一次 null），
+		// 再采一次玩家脚下的海况（海洋侧不在线时内部直接返回，成本为零）。
+		WeatherOceanApi.Tick();
+		ProbeSeaStateForApi();
+
 		BoostWaves();
 		ApplyProximityFX();
+	}
+
+	// 「浪 → 天气」方向：把海洋 mod 算出的海况读回来（HUD / 第三方可取 WeatherOceanApi.LastSeaHs）。
+	// 造浪本体在海洋侧 —— 本 mod 只负责把风场给它、再把海况收回来，互不抢水面。
+	private void ProbeSeaStateForApi()
+	{
+		if (!pValid) return;
+		try
+		{
+			WorldView wv = WorldView.main;
+			if (wv == null || wv.ViewLocation == null) return;
+			Planet planet = wv.ViewLocation.planet;
+			if (planet == null) return;
+
+			Location pl = GetPlayerLocation();
+			double ang = (pl != null) ? pl.position.AngleRadians : 0.0;
+			WeatherOceanApi.ProbeSeaState(planet, ang);
+		}
+		catch
+		{
+		}
 	}
 
 	// 近距风暴因子 0-1.4：视野拉近到风暴占据整个天空时（距中心近 × 视距小 × 强度高）
@@ -855,6 +881,11 @@ public class TyphoonManager : MonoBehaviour
 	}
 
 	// 海浪增强（实验）：风暴区附近水面波浪幅度（shader 若支持 _WaveHeight 属性则生效）。
+	//
+	// ⚠️ OceanWaves 在线时不执行：那个 mod 是**逐顶点接管水面几何**造真浪的，
+	// 而且它每帧把 _WavesOn 置 0 / 调原生水透明度。我们再去写一个全局标量
+	// 只会跟它抢同一份水面材质（"_WaveHeight" 这个属性在 SFS 水体 shader 里本来就不存在，
+	// 所以这段实际上一直是空转）。造浪权交给专业的那位，我们专心供风场。
 	private void BoostWaves()
 	{
 		if (!pValid)
@@ -869,6 +900,10 @@ public class TyphoonManager : MonoBehaviour
 			}
 			Planet planet = WorldView.main.ViewLocation.planet;
 			if (planet == null || planet.waterMaterial == null)
+			{
+				return;
+			}
+			if (WeatherOceanApi.OceanOnline())
 			{
 				return;
 			}
@@ -1252,7 +1287,7 @@ public class TyphoonManager : MonoBehaviour
 
 	private void HandleInput()
 	{
-		// fix — 快捷键仅在飞行场景生效（建造/主菜单按 F6-F9 不改变任何状态）。
+		// fix — 快捷键仅在飞行场景生效（建造/主菜单按 F6-F10 不改变任何状态）。
 		if (WorldView.main == null)
 		{
 			return;
@@ -1286,7 +1321,7 @@ public class TyphoonManager : MonoBehaviour
 			if (selected.type == StormType.Typhoon && selected.category >= 6)
 			{
 				selected.MakeHypercane();   // 满档台风再 +1 → 超级飓风（指挥中心手动触发）
-				Msg("超级飓风 Hypercane 已激活（峰值 ≈800 km/h）");
+				Msg("超级飓风 Hypercane 已激活（峰值 970 km/h）");
 			}
 			else
 			{
@@ -1299,10 +1334,10 @@ public class TyphoonManager : MonoBehaviour
 			Msg(WeatherSystem.TypeName(selected.type) + " 强度 -> " + WeatherSystem.StrengthName(selected.type, selected.category) + "  (" + selected.vmaxTarget.ToString("0") + " m/s)");
 			return;
 		}
-		if (Input.GetKeyDown((KeyCode)290)) // F9 — 底部活跃系统面板 展开/收起
+		if (Input.GetKeyDown((KeyCode)291)) // F10 — 底部活跃系统面板 展开/收起（原 F9 撞游戏"快速读档"，已挪）
 		{
 			panelExpanded = !panelExpanded;
-			Msg("活跃天气系统面板 " + (panelExpanded ? "展开" : "收起") + "（F9）");
+			Msg("活跃天气系统面板 " + (panelExpanded ? "展开" : "收起") + "（F10）");
 			return;
 		}
 		// 调试按键（F2-F5 风区移动 / Shift+F2 区域黑框）已全部移除（用户要求清理）。

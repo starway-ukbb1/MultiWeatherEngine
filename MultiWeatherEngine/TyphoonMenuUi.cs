@@ -221,7 +221,7 @@ public static class TyphoonMenuUi
 				if (sel2.type == StormType.Typhoon && sel2.category >= 6)
 				{
 					sel2.MakeHypercane();   // 满档台风再 +1 → 超级飓风（指挥中心触发）
-					TyphoonManager.Msg("超级飓风 Hypercane 已激活（峰值 ≈800 km/h）");
+					TyphoonManager.Msg("超级飓风 Hypercane 已激活（峰值 970 km/h）");
 				}
 				else
 				{
@@ -236,7 +236,7 @@ public static class TyphoonMenuUi
 		// ③ 底部提示
 		UiTheme.Fill(new Rect(px, w.yMax - 20f * s, w.width - 24f * s, 1f), UiTheme.A(UiTheme.Text, 0.12f));
 		UiTheme.DrawText(new Rect(px, w.yMax - 17f * s, w.width - 24f * s, 13f * s),
-			"F6 关闭菜单 · 滚轮滚动类型 · F9 底部活跃系统列表 · F7 解散选中 · F8 强度 +1 · 雷达与龙卷预报见右上",
+			"F6 关闭菜单 · 滚轮滚动类型 · F10 底部活跃系统列表 · F7 解散选中 · F8 强度 +1 · 雷达与龙卷预报见右上",
 			Mathf.RoundToInt(9.5f * s), UiTheme.A(UiTheme.Text, 0.45f));
 	}
 

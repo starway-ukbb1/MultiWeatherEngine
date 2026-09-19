@@ -189,7 +189,7 @@ public class TyphoonHud : MonoBehaviour
 		}
 
 		// 底栏键位提示
-		UiTheme.DrawText(new Rect(px, y + h - 15f * s, iw, 13f * s), "[F6] 菜单  [F7] 解散  [F8] 强度  [F9] 列表  [Shift+F7] 隐藏 HUD",
+		UiTheme.DrawText(new Rect(px, y + h - 15f * s, iw, 13f * s), "[F6] 菜单  [F7] 解散  [F8] 强度  [F10] 列表  [Shift+F7] 隐藏 HUD",
 			Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.45f));
 	}
 
@@ -251,7 +251,7 @@ public class TyphoonHud : MonoBehaviour
 		{
 			TyphoonManager.panelExpanded = !exp;
 		}
-		UiTheme.DrawText(new Rect(x + w - 96f * s, y + 4f * s, 88f * s, 16f * s), "[F9] 展开/收起", Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.45f), TextAnchor.MiddleRight);
+		UiTheme.DrawText(new Rect(x + w - 96f * s, y + 4f * s, 88f * s, 16f * s), "[F10] 展开/收起", Mathf.RoundToInt(10f * s), UiTheme.A(UiTheme.Text, 0.45f), TextAnchor.MiddleRight);
 		if (!exp)
 		{
 			return;
