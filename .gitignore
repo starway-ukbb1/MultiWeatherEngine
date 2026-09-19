@@ -6,3 +6,6 @@ lib/
 *.manifest
 MultiWeatherEngine/MultiWeatherEngine
 MultiWeatherEngine/MultiWeatherEngine.manifest
+
+# 版权音频：不随仓库分发（详见 README「可选：龙卷预警曲」）
+storm_chase.wav
