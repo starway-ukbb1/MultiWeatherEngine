@@ -21,7 +21,7 @@ public class Main : Mod
 
 	public override string MinimumGameVersionNecessary => "1.6";
 
-	public override string ModVersion => "v2.3.0";
+	public override string ModVersion => "v2.3.1";
 
 	// 音效修复（音量设置真正生效+雷声跟随音量+范围衰减 2.5Rmax 平方）、
 	// 地图标记改矩形（尺寸对应 Rmax）、HUD/菜单只在飞行场景显示（退出世界自动清场）、
